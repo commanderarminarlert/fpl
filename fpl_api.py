@@ -342,6 +342,11 @@ class FPLApiClient:
                     if current_season:
                         latest_entry = current_season[-1]  # Most recent gameweek
                         
+                        # DEBUG: Show what's in the latest entry
+                        logger.info(f"🔍 Latest GW entry keys: {list(latest_entry.keys())}")
+                        logger.info(f"🔍 Latest GW bank: {latest_entry.get('bank', 'NOT_FOUND')}")
+                        logger.info(f"🔍 Latest GW value: {latest_entry.get('value', 'NOT_FOUND')}")
+                        
                         # Use bank and value from latest gameweek
                         if 'bank' in latest_entry:
                             bank_balance = latest_entry['bank'] / 10
