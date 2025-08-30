@@ -1678,33 +1678,28 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
                 'Form', 'Ownership (%)', 'Score'
             ]
             
-            # Apply styling for white background and black text
-            st.markdown("""
-            <style>
-            div[data-testid="stDataFrame"] > div {
-                background-color: white !important;
-            }
-            .stDataFrame {
-                background-color: white !important;
-            }
-            .stDataFrame table {
-                background-color: white !important;
-                color: black !important;
-            }
-            .stDataFrame th {
-                background-color: white !important;
-                color: black !important;
-                border: 1px solid #ddd !important;
-            }
-            .stDataFrame td {
-                background-color: white !important;
-                color: black !important;
-                border: 1px solid #ddd !important;
-            }
-            </style>
-            """, unsafe_allow_html=True)
+            # Create HTML table with proper styling (like other sections)
+            def create_styled_table(df):
+                html = '<table style="width: 100%; border-collapse: collapse; background-color: white;">'
+                
+                # Header
+                html += '<thead><tr style="background-color: #f0f0f0;">'
+                for col in df.columns:
+                    html += f'<th style="padding: 8px; border: 1px solid #ddd; color: black; text-align: left;">{col}</th>'
+                html += '</tr></thead>'
+                
+                # Body
+                html += '<tbody>'
+                for _, row in df.iterrows():
+                    html += '<tr>'
+                    for val in row:
+                        html += f'<td style="padding: 8px; border: 1px solid #ddd; color: black; background-color: white;">{val}</td>'
+                    html += '</tr>'
+                html += '</tbody></table>'
+                
+                return html
             
-            st.dataframe(display_df, width='stretch')
+            st.markdown(create_styled_table(display_df), unsafe_allow_html=True)
         else:
             st.info("No players found with current filters.")
         
@@ -1714,28 +1709,53 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
         st.subheader("💎 **Hidden Gem Transfers**")
         st.caption("Good potential but slightly risky")
         
-        # Find hidden gems - players with good stats but low ownership
-        hidden_gems = available_players[
-            (available_players['selected_by_percent'] < 10.0) &  # Low ownership
-            (available_players['total_score'] > 60) &  # Good score
-            (available_players['value'] < 8.0)  # Affordable
-        ].nlargest(8, 'total_score')
-        
-        if not hidden_gems.empty:
-            gems_df = hidden_gems[[
-                'web_name', 'team_name', 'value', 'total_points', 
-                'form_float', 'selected_by_percent', 'total_score'
-            ]].copy()
+        try:
+            # Find hidden gems - players with good stats but low ownership
+            hidden_gems = available_players[
+                (available_players['selected_by_percent'] < 10.0) &  # Low ownership
+                (available_players['total_score'] > 60) &  # Good score
+                (available_players['value'] < 8.0)  # Affordable
+            ].nlargest(8, 'total_score')
             
-            gems_df['total_score'] = gems_df['total_score'].round(1)
-            gems_df.columns = [
-                'Player', 'Team', 'Price (£m)', 'Points', 
-                'Form', 'Ownership (%)', 'Score'
-            ]
-            
-            st.dataframe(gems_df, width='stretch')
-        else:
-            st.info("No hidden gems found at this time.")
+            if not hidden_gems.empty:
+                gems_df = hidden_gems[[
+                    'web_name', 'team_name', 'value', 'total_points', 
+                    'form_float', 'selected_by_percent', 'total_score'
+                ]].copy()
+                
+                gems_df['total_score'] = gems_df['total_score'].round(1)
+                gems_df.columns = [
+                    'Player', 'Team', 'Price (£m)', 'Points', 
+                    'Form', 'Ownership (%)', 'Score'
+                ]
+                
+                # Use the same styled table function
+                def create_styled_table_gems(df):
+                    html = '<table style="width: 100%; border-collapse: collapse; background-color: white;">'
+                    
+                    # Header
+                    html += '<thead><tr style="background-color: #f0f0f0;">'
+                    for col in df.columns:
+                        html += f'<th style="padding: 8px; border: 1px solid #ddd; color: black; text-align: left;">{col}</th>'
+                    html += '</tr></thead>'
+                    
+                    # Body
+                    html += '<tbody>'
+                    for _, row in df.iterrows():
+                        html += '<tr>'
+                        for val in row:
+                            html += f'<td style="padding: 8px; border: 1px solid #ddd; color: black; background-color: white;">{val}</td>'
+                        html += '</tr>'
+                    html += '</tbody></table>'
+                    
+                    return html
+                
+                st.markdown(create_styled_table_gems(gems_df), unsafe_allow_html=True)
+            else:
+                st.info("No hidden gems found at this time.")
+        except Exception as e:
+            st.error(f"Error finding hidden gems: {e}")
+            st.info("Unable to load hidden gems at this time.")
         
     except Exception as e:
         st.error(f"Error in transfer analysis: {e}")
