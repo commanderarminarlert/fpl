@@ -1574,59 +1574,120 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
         # 2. Recommended Player Transfers
         st.subheader("🎯 **Recommended Transfers**")
         
-        # Use max transfers from sidebar slider
-        
         try:
-            # Create user strategy for optimization
-            user_strategy = UserStrategy(
-                manager_id=manager_id,
-                team_name=manager_data.get('name', 'Unknown'),
-                current_team_value=current_team_value,
-                free_transfers=free_transfers,
-                bank=bank_balance,
-                total_points=manager_data.get('summary_overall_points', 0),
-                overall_rank=manager_data.get('summary_overall_rank', 0),
-                league_rank=1,
-                chips_remaining=[ChipType.WILDCARD, ChipType.BENCH_BOOST, ChipType.TRIPLE_CAPTAIN, ChipType.FREE_HIT],
-                planned_chips=[]
-            )
-            
             current_team_players = [pick['element'] for pick in team_data['picks']]
             
-            with st.spinner("Analyzing optimal transfers..."):
-                transfers = optimizer.optimize_transfers(
-                    user_strategy, current_team_players, max_transfers=max_transfers, allow_hits=True
-                )
-            
-            if transfers:
-                for i, transfer in enumerate(transfers, 1):
-                    st.markdown(f"""
-                    <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin: 10px 0; background: white;">
-                        <h4>Transfer {i}</h4>
-                        <p><strong>OUT:</strong> {transfer.player_out_name} → <strong>IN:</strong> {transfer.player_in_name}</p>
-                        <p><strong>Reason:</strong> {transfer.reason}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
+            with st.spinner("Analyzing intelligent transfer opportunities..."):
+                # Get all players and current team data
+                all_players = analysis.calculate_player_scores()
+                current_team_df = all_players[all_players['id'].isin(current_team_players)].copy()
+                available_players_df = all_players[~all_players['id'].isin(current_team_players)].copy()
                 
-                # Transfer summary
-                total_cost = sum(t.cost_change for t in transfers)
-                total_points = sum(t.points_potential for t in transfers)
-                hits_required = max(0, len(transfers) - free_transfers)
-                net_points = total_points - (hits_required * 4)
+                # Intelligent transfer analysis
+                smart_transfers = []
                 
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Cost", f"£{total_cost:+.1f}m")
-                with col2:
-                    st.metric("Expected Points", f"+{total_points:.1f}")
-                with col3:
-                    st.metric("Net Benefit", f"{net_points:+.1f} pts")
+                for _, current_player in current_team_df.iterrows():
+                    # Find better alternatives in same position
+                    same_position = available_players_df[
+                        available_players_df['element_type'] == current_player['element_type']
+                    ].copy()
                     
-            else:
-                st.info("No beneficial transfers found at this time.")
+                    if same_position.empty:
+                        continue
+                    
+                    # Multi-factor scoring for next 6 weeks
+                    same_position['next_6_weeks_score'] = (
+                        same_position['form_float'] * 0.3 +  # Recent form (30%)
+                        same_position['total_score'] * 0.25 +  # Overall score (25%)
+                        (same_position['total_points'] / np.maximum(same_position['minutes']/90, 1)) * 0.2 +  # PPG (20%)
+                        (100 - same_position['selected_by_percent']) * 0.1 +  # Differential potential (10%)
+                        same_position['minutes'] / 10 * 0.15  # Playing time reliability (15%)
+                    )
+                    
+                    # Price change potential (players likely to rise)
+                    same_position['price_rise_potential'] = np.where(
+                        (same_position['selected_by_percent'] > 5) & 
+                        (same_position['form_float'] > 3.5) & 
+                        (same_position['total_points'] > 20), 
+                        5, 0  # Bonus points for likely price rises
+                    )
+                    
+                    same_position['final_score'] = same_position['next_6_weeks_score'] + same_position['price_rise_potential']
+                    
+                    # Find best alternatives within budget
+                    affordable = same_position[
+                        same_position['value'] <= current_player['value'] + bank_balance
+                    ].nlargest(3, 'final_score')
+                    
+                    for _, target_player in affordable.iterrows():
+                        # Only suggest if significantly better
+                        improvement_threshold = 10 if free_transfers > 0 else 20  # Higher bar for hits
+                        
+                        if target_player['final_score'] > current_player.get('next_6_weeks_score', current_player['total_score']) + improvement_threshold:
+                            cost_change = target_player['value'] - current_player['value']
+                            
+                            # Calculate expected points improvement
+                            expected_improvement = (target_player['final_score'] - current_player['total_score']) / 10
+                            
+                            # Build reasoning
+                            reasons = []
+                            if target_player['form_float'] > current_player['form_float'] + 1:
+                                reasons.append(f"Better form ({target_player['form_float']:.1f} vs {current_player['form_float']:.1f})")
+                            if target_player['total_points'] > current_player['total_points'] + 10:
+                                reasons.append(f"Higher points ({target_player['total_points']} vs {current_player['total_points']})")
+                            if target_player['price_rise_potential'] > 0:
+                                reasons.append("Likely price rise - act fast!")
+                            if target_player['selected_by_percent'] < 10:
+                                reasons.append(f"Great differential ({target_player['selected_by_percent']:.1f}% owned)")
+                            
+                            smart_transfers.append({
+                                'player_out_name': current_player['web_name'],
+                                'player_in_name': target_player['web_name'],
+                                'cost_change': cost_change,
+                                'expected_points': expected_improvement,
+                                'priority_score': target_player['final_score'],
+                                'reason': "; ".join(reasons) if reasons else "Better overall performance expected"
+                            })
                 
+                # Sort by priority and limit to max_transfers
+                smart_transfers = sorted(smart_transfers, key=lambda x: x['priority_score'], reverse=True)[:max_transfers]
+                
+                if smart_transfers:
+                    for i, transfer in enumerate(smart_transfers, 1):
+                        priority_color = "#e8f5e8" if i <= free_transfers else "#fff3cd"  # Green for free, yellow for hits
+                        
+                        st.markdown(f"""
+                        <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin: 10px 0; background: {priority_color};">
+                            <h4>Transfer {i} {'(Free)' if i <= free_transfers else '(-4 pts)'}</h4>
+                            <p><strong>OUT:</strong> {transfer['player_out_name']} → <strong>IN:</strong> {transfer['player_in_name']}</p>
+                            <p><strong>Cost:</strong> £{transfer['cost_change']:+.1f}m | <strong>Expected:</strong> +{transfer['expected_points']:.1f} pts over 6 weeks</p>
+                            <p><strong>Why:</strong> {transfer['reason']}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Smart summary
+                    total_cost = sum(t['cost_change'] for t in smart_transfers)
+                    total_expected = sum(t['expected_points'] for t in smart_transfers)
+                    hits_required = max(0, len(smart_transfers) - free_transfers)
+                    net_benefit = total_expected - (hits_required * 4)
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Cost", f"£{total_cost:+.1f}m")
+                    with col2:
+                        st.metric("6-Week Expected", f"+{total_expected:.1f} pts")
+                    with col3:
+                        color = "normal" if net_benefit >= 0 else "inverse"
+                        st.metric("Net Benefit", f"{net_benefit:+.1f} pts", delta_color=color)
+                    
+                    if hits_required > 0:
+                        st.warning(f"⚠️ This plan requires {hits_required} hit(s) (-{hits_required*4} points)")
+                else:
+                    st.info("🎯 Your current team is well-optimized! No urgent transfers needed.")
+                    
         except Exception as e:
-            st.error(f"Error in transfer optimization: {e}")
+            st.error(f"Error in intelligent transfer analysis: {e}")
+            st.info("Please try refreshing or check your team data.")
         
         st.markdown("---")
         
@@ -1719,26 +1780,34 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
             # Remove any rows with NaN values in key columns
             available_players = available_players.dropna(subset=numeric_cols)
             
-            # Find hidden gems - players with explosive potential but low ownership
+            # Find hidden gems - intelligent breakout player identification
+            # Calculate points per game for players with decent minutes
+            available_players['ppg'] = available_players['total_points'] / np.maximum(available_players['minutes'] / 90, 1)
+            
+            # Multi-criteria scoring for breakout potential
             hidden_gems = available_players[
-                (available_players['selected_by_percent'] < 15.0) &  # Low ownership (not well known)
-                (available_players['form_float'] > 3.0) &  # Good recent form
-                (available_players['total_points'] > 15) &  # Some proven performance
-                (available_players['minutes'] > 200) &  # Regular playing time
-                (available_players['value'] < 9.0)  # Still affordable
-            ].nlargest(10, 'total_score')
+                (available_players['selected_by_percent'] < 20.0) &  # Not mainstream yet
+                (available_players['minutes'] > 180) &  # Getting regular game time
+                (available_players['total_points'] > 10) &  # Has delivered points
+                (available_players['value'] < 10.0) &  # Still affordable before price rises
+                (
+                    (available_players['form_float'] > 2.5) |  # Either good form
+                    (available_players['ppg'] > 3.0) |  # Or good points per game
+                    (available_players['total_score'] > 65)  # Or high analysis score
+                )
+            ].nlargest(8, 'total_score')
             
             if not hidden_gems.empty:
                 gems_df = hidden_gems[[
                     'web_name', 'team_name', 'value', 'total_points', 
-                    'form_float', 'selected_by_percent', 'minutes', 'total_score'
+                    'form_float', 'selected_by_percent', 'ppg', 'total_score'
                 ]].copy()
                 
                 gems_df['total_score'] = gems_df['total_score'].round(1)
-                gems_df['minutes'] = (gems_df['minutes'] / 90).round(1)  # Convert to games played
+                gems_df['ppg'] = gems_df['ppg'].round(1)
                 gems_df.columns = [
                     'Player', 'Team', 'Price (£m)', 'Points', 
-                    'Form', 'Ownership (%)', 'Games', 'Score'
+                    'Form', 'Ownership (%)', 'PPG', 'Score'
                 ]
                 
                 # Use the same styled table function
@@ -1764,10 +1833,10 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
                 
                 st.markdown(create_styled_table_gems(gems_df), unsafe_allow_html=True)
             else:
-                st.info("No explosive potential players found with current criteria. Try adjusting your search!")
+                st.info("No breakout candidates identified at this time. All potential players may already be popular!")
         except Exception as e:
-            st.error(f"Error finding explosive players: {e}")
-            st.info("Unable to load potential breakout players at this time.")
+            st.error(f"Error identifying breakout players: {e}")
+            st.info("Unable to analyze breakout potential at this time.")
         
     except Exception as e:
         st.error(f"Error in transfer analysis: {e}")
