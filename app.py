@@ -1742,27 +1742,41 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
                                 'reason': "; ".join(reasons) if reasons else "Better overall performance expected"
                             })
                 
-                # Sort by priority and limit to max_transfers
-                smart_transfers = sorted(smart_transfers, key=lambda x: x['priority_score'], reverse=True)[:max_transfers]
+                # Sort by priority
+                smart_transfers = sorted(smart_transfers, key=lambda x: x['priority_score'], reverse=True)
+                
+                # Only suggest up to available free transfers (no hits)
+                num_allowed = max(0, min(free_transfers, max_transfers))
+                
+                # Greedy selection while respecting bank balance
+                selected_transfers = []
+                running_bank = float(bank_balance)
+                for t in smart_transfers:
+                    if len(selected_transfers) >= num_allowed:
+                        break
+                    new_bank = running_bank - t['cost_change']
+                    if new_bank >= -1e-9:
+                        selected_transfers.append(t)
+                        running_bank = new_bank
+                
+                smart_transfers = selected_transfers
                 
                 if smart_transfers:
                     for i, transfer in enumerate(smart_transfers, 1):
-                        priority_color = "#e8f5e8" if i <= free_transfers else "#fff3cd"  # Green for free, yellow for hits
+                        priority_color = "#e8f5e8"
                         
                         st.markdown(f"""
                         <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin: 10px 0; background: {priority_color};">
-                            <h4>Transfer {i} {'(Free)' if i <= free_transfers else '(-4 pts)'}</h4>
+                            <h4>Transfer {i} (Free)</h4>
                             <p><strong>OUT:</strong> {transfer['player_out_name']} → <strong>IN:</strong> {transfer['player_in_name']}</p>
                             <p><strong>Cost:</strong> £{transfer['cost_change']:+.1f}m | <strong>Expected:</strong> +{transfer['expected_points']:.1f} pts over 6 weeks</p>
                             <p><strong>Why:</strong> {transfer['reason']}</p>
                         </div>
                         """, unsafe_allow_html=True)
                     
-                    # Smart summary
+                    # Summary for free-only plan
                     total_cost = sum(t['cost_change'] for t in smart_transfers)
                     total_expected = sum(t['expected_points'] for t in smart_transfers)
-                    hits_required = max(0, len(smart_transfers) - free_transfers)
-                    net_benefit = total_expected - (hits_required * 4)
                     
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -1770,13 +1784,9 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
                     with col2:
                         st.metric("6-Week Expected", f"+{total_expected:.1f} pts")
                     with col3:
-                        color = "normal" if net_benefit >= 0 else "inverse"
-                        st.metric("Net Benefit", f"{net_benefit:+.1f} pts", delta_color=color)
-                    
-                    if hits_required > 0:
-                        st.warning(f"⚠️ This plan requires {hits_required} hit(s) (-{hits_required*4} points)")
+                        st.metric("Hits", "0 (no point hits)")
                 else:
-                    st.info("🎯 Your current team is well-optimized! No urgent transfers needed.")
+                    st.info("🎯 No free-transfer upgrades identified within budget for the next gameweek.")
                     
         except Exception as e:
             st.error(f"Error in intelligent transfer analysis: {e}")
