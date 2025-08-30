@@ -1282,7 +1282,7 @@ def main():
         dashboard_tab(api, analysis, optimizer, manager_id, league_id)
     
     with tab2:
-        transfer_tab(api, analysis, optimizer, manager_id, enable_hits, max_transfers)
+        transfer_tab(api, analysis, optimizer, manager_id)
     
     with tab3:
         chip_strategy_tab(api, planner, manager_id)
