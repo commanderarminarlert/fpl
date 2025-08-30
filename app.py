@@ -1140,7 +1140,7 @@ def main():
     
     team_url = st.sidebar.text_input(
         "FPL Team URL",
-        value="",
+        value="https://fantasy.premierleague.com/entry/936801/",
         help="Enter your FPL team URL (e.g., https://fantasy.premierleague.com/entry/123456/)"
     )
     

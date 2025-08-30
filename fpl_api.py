@@ -320,20 +320,46 @@ class FPLApiClient:
                 logger.warning(f"Could not get transfers data: {e}")
             
             # Calculate REAL bank balance and team value
-            # The manager_data contains the ACTUAL current values
+            # Try multiple approaches to get the most accurate data
+            
+            # Method 1: Use manager_data (most reliable)
             bank_balance = manager_data.get('last_deadline_bank', 0) / 10
             team_value = manager_data.get('last_deadline_value', 1000) / 10
             
-            # Alternative: Try to get from summary_overall_rank endpoint
+            # Method 2: Check for other bank/value fields
+            if bank_balance == 0 and 'bank' in manager_data:
+                bank_balance = manager_data.get('bank', 0) / 10
+            
+            if team_value == 100.0 and 'value' in manager_data:
+                team_value = manager_data.get('value', 1000) / 10
+            
+            # Method 3: Try current season data if available
             try:
-                summary_data = self._make_request(f"entry/{manager_id}/")
-                if summary_data:
-                    # These are the LIVE values
-                    bank_balance = summary_data.get('last_deadline_bank', bank_balance * 10) / 10
-                    team_value = summary_data.get('last_deadline_value', team_value * 10) / 10
-                    logger.info(f"💰 LIVE values: Bank £{bank_balance:.1f}m, Team £{team_value:.1f}m")
-            except:
-                pass
+                history_data = self._make_request(f"entry/{manager_id}/history/")
+                if history_data and 'current' in history_data and history_data['current']:
+                    # Get the most recent entry
+                    current_season = history_data['current']
+                    if current_season:
+                        latest_entry = current_season[-1]  # Most recent gameweek
+                        
+                        # Use bank and value from latest gameweek
+                        if 'bank' in latest_entry:
+                            bank_balance = latest_entry['bank'] / 10
+                        if 'value' in latest_entry:
+                            team_value = latest_entry['value'] / 10
+                            
+                        logger.info(f"📊 Using latest GW data: Bank £{bank_balance:.1f}m, Value £{team_value:.1f}m")
+            except Exception as e:
+                logger.warning(f"Could not get history data: {e}")
+            
+            logger.info(f"💰 FINAL values: Bank £{bank_balance:.1f}m, Team £{team_value:.1f}m")
+            
+            # DEBUG: Log available fields for troubleshooting
+            logger.info(f"🔍 Manager data keys: {list(manager_data.keys())}")
+            if 'last_deadline_bank' in manager_data:
+                logger.info(f"🔍 last_deadline_bank: {manager_data['last_deadline_bank']}")
+            if 'last_deadline_value' in manager_data:
+                logger.info(f"🔍 last_deadline_value: {manager_data['last_deadline_value']}")
             
             # Combine all data
             result = {
