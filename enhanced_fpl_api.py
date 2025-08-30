@@ -127,15 +127,11 @@ class EnhancedFPLApiClient:
     
     @validate_and_retry(max_retries=3)
     def get_manager_team_enhanced(self, manager_id: int, gameweek: int) -> Dict[str, Any]:
-        """Get manager team data with enhanced validation"""
+        """Get manager team data with enhanced validation - REAL-TIME MODE"""
         cache_key = f"team_{manager_id}_{gameweek}"
         
-        # Check cache (shorter duration for team data)
-        if self._is_cache_valid(cache_key, duration=60):  # 1 minute cache
-            logger.info(f"📋 Using cached team data for {manager_id} GW{gameweek}")
-            return self._cache[cache_key]
-        
-        logger.info(f"🔍 Fetching fresh team data for {manager_id} GW{gameweek}")
+        # REAL-TIME MODE: NO CACHING for team data - always fetch fresh
+        logger.info(f"🔄 Fetching LIVE team data for {manager_id} GW{gameweek}")
         
         url = f"{self.base_url}/entry/{manager_id}/event/{gameweek}/picks/"
         response = self.session.get(url, timeout=10)
@@ -146,10 +142,11 @@ class EnhancedFPLApiClient:
         # Enhanced team data validation
         corrected_data = self._validate_and_correct_team_data(data, manager_id, gameweek)
         
-        # Cache the corrected data
+        # Store in cache but don't rely on it - always fetch fresh
         self._cache[cache_key] = corrected_data
         self._cache_timestamps[cache_key] = datetime.now()
         
+        logger.info(f"✅ Fresh team data loaded for {manager_id} GW{gameweek}")
         return corrected_data
     
     def calculate_accurate_bank_balance(self, manager_id: int) -> Tuple[float, str, Dict]:

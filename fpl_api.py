@@ -121,7 +121,8 @@ class FPLApiClient:
         return df
     
     def get_manager_data(self, manager_id: int) -> Dict:
-        """Get manager's team data"""
+        """Get manager's team data - ALWAYS FRESH"""
+        logger.info(f"🔄 Fetching LIVE manager data for {manager_id}")
         return self._make_request(f"entry/{manager_id}/")
     
     def calculate_available_transfers(self, manager_id: int) -> int:
@@ -214,7 +215,8 @@ class FPLApiClient:
         return 1
     
     def get_manager_team(self, manager_id: int, gameweek: int) -> Dict:
-        """Get manager's team for a specific gameweek"""
+        """Get manager's team for a specific gameweek - ALWAYS FRESH"""
+        logger.info(f"🔄 Fetching LIVE team data for manager {manager_id}, GW{gameweek}")
         return self._make_request(f"entry/{manager_id}/event/{gameweek}/picks/")
     
     def get_manager_history(self, manager_id: int) -> Dict:
@@ -231,23 +233,27 @@ class FPLApiClient:
         return self._make_request(f"element-summary/{player_id}/")
     
     def get_current_gameweek(self) -> int:
-        """Get the current gameweek number with enhanced accuracy"""
+        """Get the current gameweek number - REAL-TIME DETECTION"""
+        logger.info("🔄 Detecting LIVE current gameweek...")
         
         # Use enhanced API if available
         if self.enhanced_api:
             try:
+                # Clear enhanced API cache first
+                self.enhanced_api._cache.clear()
                 current_gw = self.enhanced_api.get_current_gameweek_enhanced()
-                logger.debug(f"✅ Enhanced gameweek detection: GW{current_gw}")
+                logger.info(f"✅ Enhanced gameweek detection: GW{current_gw}")
                 return current_gw
             except Exception as e:
                 logger.warning(f"⚠️ Enhanced gameweek detection failed, falling back to basic: {e}")
         
-        # Fallback to basic method
-        bootstrap = self.get_bootstrap_data()
+        # Fallback to basic method - FORCE FRESH DATA
+        bootstrap = self.get_bootstrap_data(force_refresh=True)
         events = bootstrap['events']
         
         for event in events:
             if event['is_current']:
+                logger.info(f"✅ Current gameweek detected: {event['id']}")
                 return event['id']
         
         # If no current gameweek, return next upcoming one

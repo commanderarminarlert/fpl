@@ -1547,9 +1547,10 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
         return
 
     try:
-        # FORCE REAL-TIME DATA REFRESH
-        with st.spinner("🔄 Fetching latest data from FPL..."):
-            # Clear all caches and force fresh data
+        # FORCE REAL-TIME DATA REFRESH - COMPLETE SYNC
+        with st.spinner("🔄 Syncing with live FPL data..."):
+            # Clear ALL caches completely
+            st.cache_data.clear()
             api.get_bootstrap_data(force_refresh=True)
             analysis.update_data()
             
@@ -1557,15 +1558,38 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
             if hasattr(api, 'enhanced_api') and api.enhanced_api:
                 api.enhanced_api._cache.clear()
                 api.enhanced_api._cache_timestamps.clear()
+            
+            # Clear any internal caches
+            api._bootstrap_data = None
+            api._last_fetch = None
+            
+            st.success("✅ Live data synced from fantasy.premierleague.com")
         
-        # Get current gameweek and team data
+        # Get current gameweek and team data with debugging
         current_gw = api.get_current_gameweek()
+        st.info(f"🎯 Current Gameweek: {current_gw}")
+        
         team_data = api.get_manager_team(manager_id, current_gw)
         manager_data = api.get_manager_data(manager_id)
         
         if not team_data or 'picks' not in team_data:
-            st.error("Could not load current team data.")
-            return
+            st.error(f"❌ Could not load team data for manager {manager_id}, GW{current_gw}")
+            st.info("This might mean you haven't set your team for this gameweek yet.")
+            
+            # Try previous gameweek
+            if current_gw > 1:
+                st.info(f"🔄 Trying previous gameweek ({current_gw-1})...")
+                team_data = api.get_manager_team(manager_id, current_gw-1)
+                if team_data and 'picks' in team_data:
+                    st.warning(f"⚠️ Showing data from GW{current_gw-1} (latest available)")
+                    current_gw = current_gw - 1
+                else:
+                    return
+            else:
+                return
+        
+        # Debug information
+        st.info(f"📊 Team data loaded: {len(team_data.get('picks', []))} players")
         
         # Calculate real-time metrics
         if hasattr(api, 'enhanced_api') and api.enhanced_api:
