@@ -153,8 +153,8 @@ class UserStrategy:
     overall_rank: int
     league_rank: int
     
-    # Chip strategy
-    chips_remaining: List[ChipType]
+    # Chip strategy - track quantities (2 of each chip per season)
+    chips_remaining: Dict[ChipType, int]  # e.g., {ChipType.WILDCARD: 2, ChipType.FREE_HIT: 1}
     planned_chips: List[ChipStrategy]
     
     # Transfer strategy
