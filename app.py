@@ -1710,6 +1710,15 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
         st.caption("Undervalued players with explosive potential")
         
         try:
+            # Ensure numeric columns are properly converted
+            numeric_cols = ['selected_by_percent', 'form_float', 'total_points', 'minutes', 'value']
+            for col in numeric_cols:
+                if col in available_players.columns:
+                    available_players[col] = pd.to_numeric(available_players[col], errors='coerce')
+            
+            # Remove any rows with NaN values in key columns
+            available_players = available_players.dropna(subset=numeric_cols)
+            
             # Find hidden gems - players with explosive potential but low ownership
             hidden_gems = available_players[
                 (available_players['selected_by_percent'] < 15.0) &  # Low ownership (not well known)
