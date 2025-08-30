@@ -1569,68 +1569,81 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
             
             st.success("✅ Live data synced from fantasy.premierleague.com")
         
-        # Get current gameweek and team data with debugging
-        detected_gw = api.get_current_gameweek()
-        current_gw = manual_gw if manual_gw else detected_gw
+        # 🚨 NEW: Get LIVE team data (equivalent to /my-team page)
+        st.write("**🔄 Fetching LIVE team data from fantasy.premierleague.com/my-team...**")
         
         if manual_gw:
+            # Manual override - use specific gameweek
+            detected_gw = api.get_current_gameweek()
+            current_gw = manual_gw
             st.info(f"🎯 Using Manual Override: GW{current_gw} (detected: GW{detected_gw})")
+            
+            team_data = api.get_manager_team(manager_id, current_gw)
+            manager_data = api.get_manager_data(manager_id)
+            
+            if not team_data or 'picks' not in team_data:
+                st.error(f"❌ No team data found for GW{current_gw}")
+                return
+                
         else:
-            st.info(f"🎯 Auto-detected Gameweek: {current_gw}")
+            # Use new live team method
+            try:
+                live_team_state = api.get_current_team_with_transfers(manager_id)
+                
+                team_data = live_team_state['team_data']
+                manager_data = live_team_state['manager_data']
+                current_gw = live_team_state['gameweek_used']
+                
+                st.success(f"✅ LIVE team data loaded from GW{current_gw}")
+                
+                # Show transfers if any
+                if live_team_state.get('transfers_data') and live_team_state['transfers_data'].get('transfers'):
+                    transfers = live_team_state['transfers_data']['transfers']
+                    if transfers:
+                        st.info(f"🔄 Found {len(transfers)} recent transfers")
+                
+            except Exception as e:
+                st.error(f"❌ Failed to get live team data: {e}")
+                st.info("Falling back to gameweek-based method...")
+                
+                # Fallback to old method
+                detected_gw = api.get_current_gameweek()
+                current_gw = detected_gw
+                team_data = api.get_manager_team(manager_id, current_gw)
+                manager_data = api.get_manager_data(manager_id)
         
-        # DEBUG: Let's check what gameweeks are available
+        # DEBUG: Show gameweek status
         bootstrap = api.get_bootstrap_data(force_refresh=True)
         events = bootstrap['events']
         
-        # Show gameweek status for debugging
-        st.write("**🔍 Gameweek Status Debug:**")
-        for event in events[:5]:  # Show first 5 gameweeks
-            status = []
-            if event.get('is_current'): status.append("CURRENT")
-            if event.get('is_next'): status.append("NEXT")
-            if event.get('finished'): status.append("FINISHED")
-            if event.get('data_checked'): status.append("DATA_CHECKED")
-            
-            st.write(f"GW{event['id']}: {', '.join(status) if status else 'PENDING'}")
-        
-        # Try both current gameweek and next gameweek
-        team_data = api.get_manager_team(manager_id, current_gw)
-        
-        # If no data for current GW, try next GW
-        if not team_data or 'picks' not in team_data:
-            st.warning(f"No team data for GW{current_gw}, trying GW{current_gw + 1}...")
-            try:
-                team_data_next = api.get_manager_team(manager_id, current_gw + 1)
-                if team_data_next and 'picks' in team_data_next:
-                    team_data = team_data_next
-                    current_gw = current_gw + 1
-                    st.success(f"✅ Found team data for GW{current_gw}")
-            except:
-                pass
-        
-        manager_data = api.get_manager_data(manager_id)
+        with st.expander("🔍 Debug: Gameweek Status"):
+            for event in events[:5]:  # Show first 5 gameweeks
+                status = []
+                if event.get('is_current'): status.append("CURRENT")
+                if event.get('is_next'): status.append("NEXT")
+                if event.get('finished'): status.append("FINISHED")
+                if event.get('data_checked'): status.append("DATA_CHECKED")
+                
+                st.write(f"GW{event['id']}: {', '.join(status) if status else 'PENDING'}")
         
         if not team_data or 'picks' not in team_data:
-            st.error(f"❌ Could not load team data for manager {manager_id}, GW{current_gw}")
-            st.info("This might mean you haven't set your team for this gameweek yet.")
-            
-            # Try previous gameweek
-            if current_gw > 1:
-                st.info(f"🔄 Trying previous gameweek ({current_gw-1})...")
-                team_data = api.get_manager_team(manager_id, current_gw-1)
-                if team_data and 'picks' in team_data:
-                    st.warning(f"⚠️ Showing data from GW{current_gw-1} (latest available)")
-                    current_gw = current_gw - 1
-                else:
-                    return
-            else:
-                return
+            st.error(f"❌ Could not load any team data for manager {manager_id}")
+            return
         
         # Debug information
-        st.info(f"📊 Team data loaded: {len(team_data.get('picks', []))} players")
+        st.info(f"📊 Using GW{current_gw} team data: {len(team_data.get('picks', []))} players")
         
-        # Calculate real-time metrics
-        if hasattr(api, 'enhanced_api') and api.enhanced_api:
+        # Calculate real-time metrics from LIVE data
+        if 'live_team_state' in locals() and live_team_state:
+            # Use live team state data (most accurate)
+            bank_balance = live_team_state['bank_balance']
+            current_team_value = live_team_state['team_value']
+            free_transfers = api.calculate_available_transfers(manager_id)
+            
+            st.success(f"💰 LIVE Bank Balance: £{bank_balance:.1f}m")
+            st.success(f"📊 LIVE Team Value: £{current_team_value:.1f}m")
+            
+        elif hasattr(api, 'enhanced_api') and api.enhanced_api:
             try:
                 bank_balance = api.enhanced_api.calculate_accurate_bank_balance(manager_id)[0]
                 current_team_value = api.enhanced_api.calculate_accurate_team_value(manager_id)[0]

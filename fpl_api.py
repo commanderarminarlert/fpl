@@ -219,6 +219,94 @@ class FPLApiClient:
         logger.info(f"🔄 Fetching LIVE team data for manager {manager_id}, GW{gameweek}")
         return self._make_request(f"entry/{manager_id}/event/{gameweek}/picks/")
     
+    def get_manager_live_team(self, manager_id: int) -> Dict:
+        """Get manager's CURRENT LIVE team (equivalent to /my-team page) - ALWAYS FRESH"""
+        logger.info(f"🔄 Fetching LIVE current team for manager {manager_id} (my-team equivalent)")
+        
+        # Try multiple endpoints to get the most current team data
+        try:
+            # Method 1: Get current team directly (this shows pending transfers)
+            live_team = self._make_request(f"entry/{manager_id}/")
+            
+            # Method 2: Also try the transfers endpoint for pending transfers
+            try:
+                transfers = self._make_request(f"entry/{manager_id}/transfers/")
+                if transfers and 'transfers' in transfers:
+                    live_team['pending_transfers'] = transfers['transfers']
+            except:
+                pass
+            
+            return live_team
+            
+        except Exception as e:
+            logger.error(f"Failed to get live team data: {e}")
+            # Fallback to current gameweek method
+            current_gw = self.get_current_gameweek()
+            return self.get_manager_team(manager_id, current_gw)
+    
+    def get_current_team_with_transfers(self, manager_id: int) -> Dict:
+        """Get the EXACT current team as shown on /my-team including pending transfers"""
+        logger.info(f"🔄 Getting EXACT current team state for manager {manager_id}")
+        
+        try:
+            # Get manager data (includes current bank, team value, etc.)
+            manager_data = self.get_manager_data(manager_id)
+            
+            # Get current gameweek
+            current_gw = self.get_current_gameweek()
+            
+            # Try to get team for current gameweek first
+            team_data = None
+            try:
+                team_data = self.get_manager_team(manager_id, current_gw)
+                logger.info(f"✅ Found team data for current GW{current_gw}")
+            except:
+                pass
+            
+            # If no current GW data, try next gameweek (where pending transfers would be)
+            if not team_data or 'picks' not in team_data:
+                try:
+                    team_data = self.get_manager_team(manager_id, current_gw + 1)
+                    if team_data and 'picks' in team_data:
+                        logger.info(f"✅ Found team data for next GW{current_gw + 1} (pending transfers)")
+                        current_gw = current_gw + 1
+                except:
+                    pass
+            
+            # If still no data, try previous gameweek
+            if not team_data or 'picks' not in team_data:
+                try:
+                    team_data = self.get_manager_team(manager_id, current_gw - 1)
+                    if team_data and 'picks' in team_data:
+                        logger.info(f"✅ Found team data for previous GW{current_gw - 1}")
+                        current_gw = current_gw - 1
+                except:
+                    pass
+            
+            # Get transfers data
+            transfers_data = None
+            try:
+                transfers_data = self._make_request(f"entry/{manager_id}/transfers/")
+            except:
+                pass
+            
+            # Combine all data
+            result = {
+                'manager_data': manager_data,
+                'team_data': team_data,
+                'transfers_data': transfers_data,
+                'gameweek_used': current_gw,
+                'bank_balance': manager_data.get('last_deadline_bank', 0) / 10,
+                'team_value': manager_data.get('last_deadline_value', 1000) / 10,
+            }
+            
+            logger.info(f"✅ Complete team state retrieved for GW{current_gw}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get current team state: {e}")
+            raise
+    
     def get_manager_history(self, manager_id: int) -> Dict:
         """Get manager's history data"""
         return self._make_request(f"entry/{manager_id}/history/")
