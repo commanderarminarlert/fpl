@@ -1534,10 +1534,14 @@ def dashboard_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transf
 
 def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: TransferOptimizer, manager_id: int, max_transfers: int):
     """Transfer Analysis & Recommendations"""
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
         st.header("🔄 Transfer Analysis")
     with col2:
+        # Manual gameweek override
+        manual_gw = st.selectbox("Override GW", [None, 1, 2, 3, 4, 5], 
+                                help="Override gameweek detection if needed")
+    with col3:
         if st.button("🔄 Refresh Data", help="Force refresh all data from FPL API"):
             st.cache_data.clear()
             st.rerun()
@@ -1566,10 +1570,44 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
             st.success("✅ Live data synced from fantasy.premierleague.com")
         
         # Get current gameweek and team data with debugging
-        current_gw = api.get_current_gameweek()
-        st.info(f"🎯 Current Gameweek: {current_gw}")
+        detected_gw = api.get_current_gameweek()
+        current_gw = manual_gw if manual_gw else detected_gw
         
+        if manual_gw:
+            st.info(f"🎯 Using Manual Override: GW{current_gw} (detected: GW{detected_gw})")
+        else:
+            st.info(f"🎯 Auto-detected Gameweek: {current_gw}")
+        
+        # DEBUG: Let's check what gameweeks are available
+        bootstrap = api.get_bootstrap_data(force_refresh=True)
+        events = bootstrap['events']
+        
+        # Show gameweek status for debugging
+        st.write("**🔍 Gameweek Status Debug:**")
+        for event in events[:5]:  # Show first 5 gameweeks
+            status = []
+            if event.get('is_current'): status.append("CURRENT")
+            if event.get('is_next'): status.append("NEXT")
+            if event.get('finished'): status.append("FINISHED")
+            if event.get('data_checked'): status.append("DATA_CHECKED")
+            
+            st.write(f"GW{event['id']}: {', '.join(status) if status else 'PENDING'}")
+        
+        # Try both current gameweek and next gameweek
         team_data = api.get_manager_team(manager_id, current_gw)
+        
+        # If no data for current GW, try next GW
+        if not team_data or 'picks' not in team_data:
+            st.warning(f"No team data for GW{current_gw}, trying GW{current_gw + 1}...")
+            try:
+                team_data_next = api.get_manager_team(manager_id, current_gw + 1)
+                if team_data_next and 'picks' in team_data_next:
+                    team_data = team_data_next
+                    current_gw = current_gw + 1
+                    st.success(f"✅ Found team data for GW{current_gw}")
+            except:
+                pass
+        
         manager_data = api.get_manager_data(manager_id)
         
         if not team_data or 'picks' not in team_data:
