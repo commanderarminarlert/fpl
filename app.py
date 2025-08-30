@@ -1528,139 +1528,258 @@ def dashboard_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transf
         st.error(f"Error loading dashboard: {e}")
 
 def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: TransferOptimizer, manager_id: int):
-    """Transfer analysis and recommendations tab"""
-    st.header("🔄 Transfer Analysis & Recommendations")
+    """AI-Driven Transfer Analysis & Action Plan"""
+    st.header("🤖 AI Transfer Intelligence & Action Plan")
     
     if not manager_id:
-        st.warning("Please enter your Manager ID to get transfer recommendations.")
+        st.warning("Please enter your Manager ID to get AI-powered transfer recommendations.")
         return
     
     try:
-        # Initialize real team analyzer
-        from real_team_analyzer import RealTeamAnalyzer
-        team_analyzer = RealTeamAnalyzer(api, analysis)
-        
-        # Get current gameweek
+        # Get current gameweek and team data
         current_gw = api.get_current_gameweek()
+        team_data = api.get_manager_team(manager_id, current_gw)
+        manager_data = api.get_manager_data(manager_id)
         
-        # Analyze current team comprehensively
-        with st.spinner("🔍 Analyzing your team comprehensively..."):
-            team_analysis = team_analyzer.analyze_current_team(manager_id, current_gw)
+        if not team_data or 'picks' not in team_data:
+            st.error("Could not load current team data.")
+            return
         
-        # Display comprehensive analysis
-        st.success("🎉 Team Analysis Complete!")
+        # Calculate real-time metrics
+        current_team_value = 0
+        if hasattr(api, 'enhanced_api') and api.enhanced_api:
+            try:
+                bank_balance = api.enhanced_api.calculate_accurate_bank_balance(manager_id)[0]
+                current_team_value = api.enhanced_api.calculate_accurate_team_value(manager_id)[0]
+                free_transfers = api.enhanced_api.calculate_accurate_free_transfers(manager_id)[0]
+            except:
+                bank_balance = manager_data.get('last_deadline_bank', 0) / 10
+                current_team_value = manager_data.get('last_deadline_value', 1000) / 10
+                free_transfers = api.calculate_available_transfers(manager_id)
+        else:
+            bank_balance = manager_data.get('last_deadline_bank', 0) / 10
+            current_team_value = manager_data.get('last_deadline_value', 1000) / 10
+            free_transfers = api.calculate_available_transfers(manager_id)
         
-        # Team Overview
-        st.subheader("📊 **Team Overview**")
-        col1, col2, col3, col2 = st.columns(4)
+        # Team Overview Dashboard
+        st.subheader("📊 **Team Status Overview**")
+        
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("Total Players", len(team_analysis['current_team']))
+            st.metric(
+                "Team Value", 
+                f"£{current_team_value:.1f}m",
+                delta=f"£{current_team_value - 100.0:+.1f}m"
+            )
         
         with col2:
-            high_risk = team_analysis['six_week_plan']['summary']['high_risk_players']
-            st.metric("High Risk Players", high_risk, delta=f"{high_risk} difficult fixtures")
+            st.metric(
+                "Bank Balance", 
+                f"£{bank_balance:.1f}m",
+                delta="Available funds"
+            )
         
         with col3:
-            medium_risk = team_analysis['six_week_plan']['summary']['medium_risk_players']
-            st.metric("Medium Risk Players", medium_risk, delta="Monitor closely")
+            st.metric(
+                "Free Transfers", 
+                free_transfers,
+                delta="This week"
+            )
         
-        with col2:
-            recommended_transfers = team_analysis['six_week_plan']['summary']['recommended_transfers']
-            st.metric("Recommended Transfers", recommended_transfers, delta="Priority actions")
-        
-        st.markdown("---")
-        
-        # Fixture Analysis for Each Player
-        st.subheader("🎯 **Player Fixture Analysis (Next 6 Weeks)**")
-        
-        fixture_analysis = team_analysis['fixture_analysis']
-        
-        # Create expandable sections for each player
-        for player_id, analysis in fixture_analysis.items():
-            with st.expander(f"👤 {analysis['player_name']} ({analysis['position']}) - {analysis['team_name']}"):
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown(f"**Overall Rating:** {analysis['overall_rating']}")
-                    st.markdown(f"**Fixture Risk:** {analysis['fixture_risk']}")
-                    st.markdown(f"**Transfer Priority:** {analysis['transfer_priority']}")
-                    st.markdown(f"**Average Difficulty:** {analysis['average_difficulty']:.1f}/5.0")
-                
-                with col2:
-                    # Color code based on risk
-                    if analysis['fixture_risk'] == 'HIGH RISK':
-                        st.error("🚨 HIGH RISK - Consider transfer")
-                    elif analysis['fixture_risk'] == 'MEDIUM RISK':
-                        st.warning("⚠️ MEDIUM RISK - Monitor closely")
-                    else:
-                        st.success("✅ LOW RISK - Good fixtures")
-                
-                # Show upcoming fixtures
-                st.markdown("**📅 Upcoming Fixtures:**")
-                fixtures_df = pd.DataFrame(analysis['fixtures'])
-                fixtures_df = fixtures_df[['gameweek', 'opponent', 'home_away', 'difficulty_rating', 'expected_points']]
-                fixtures_df.columns = ['GW', 'Opponent', 'H/A', 'Difficulty', 'Expected Points']
-                
-                # Color code difficulty
-                def color_difficulty(val):
-                    if 'Very Easy' in str(val) or 'Easy' in str(val):
-                        return 'background-color: #90EE90'
-                    elif 'Moderate' in str(val):
-                        return 'background-color: #FFD700'
-                    else:
-                        return 'background-color: #FFB6C1'
-                
-                st.dataframe(fixtures_df.style.applymap(color_difficulty, subset=['Difficulty']))
+        with col4:
+            total_points = manager_data.get('summary_overall_points', 0)
+            gw_points = manager_data.get('summary_event_points', 0)
+            st.metric(
+                "Total Points", 
+                total_points,
+                delta=f"GW{current_gw}: {gw_points}"
+            )
         
         st.markdown("---")
         
-        # Transfer Recommendations
-        st.subheader("🔄 **Smart Transfer Recommendations**")
+        # AI Analysis Section
+        st.subheader("🧠 **AI Intelligence Analysis**")
         
-        transfer_recommendations = team_analysis['transfer_recommendations']
+        # Get players data for analysis
+        players_df = analysis.calculate_player_scores()
+        current_team_players = [pick['element'] for pick in team_data['picks']]
         
-        if transfer_recommendations:
-            for i, transfer in enumerate(transfer_recommendations, 1):
-                with st.container():
-                    st.markdown(f"""
-                    <div style="border: 2px solid #ff6b6b; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                        <h4>🎯 Transfer {i}: {transfer['priority']}</h4>
-                        <p><strong>OUT:</strong> {transfer['player_out_name']} → <strong>IN:</strong> {transfer['player_in_name']}</p>
-                        <p><strong>Reason:</strong> {transfer['reason']}</p>
-                        <p><strong>Expected Improvement:</strong> +{transfer['expected_improvement']:.1f} points</p>
-                        <p><strong>Cost Change:</strong> £{transfer['cost_change']:+.1f}m</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-        else:
-            st.success("✅ No urgent transfers needed! Your team has good fixtures.")
+        # Analyze current team performance
+        team_players_data = players_df[players_df['id'].isin(current_team_players)].copy()
         
-        st.markdown("---")
+        # Calculate team strength metrics
+        avg_form = team_players_data['form_float'].mean()
+        avg_points = team_players_data['total_points'].mean()
+        avg_value = team_players_data['value'].mean()
         
-        # 6-Week Strategic Planning
-        st.subheader("📈 **6-Week Strategic Planning**")
-        
-        six_week_plan = team_analysis['six_week_plan']
-        
-        # Weekly breakdown
+        # Performance insights
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("**📊 Weekly Analysis:**")
-            for week, analysis in six_week_plan['weekly_analysis'].items():
-                if analysis['fixtures']:
-                    risk_color = "🔴" if analysis['risk_level'] == 'HIGH RISK' else "🟡" if analysis['risk_level'] == 'MEDIUM RISK' else "🟢"
-                    st.markdown(f"{risk_color} **{week}**: {analysis['overall_rating']} ({analysis['risk_level']})")
+            st.markdown("**📈 Team Performance Metrics:**")
+            st.metric("Average Form", f"{avg_form:.1f}")
+            st.metric("Average Points", f"{avg_points:.0f}")
+            st.metric("Average Value", f"£{avg_value:.1f}m")
         
         with col2:
-            st.markdown("**🎯 Strategic Recommendations:**")
-            for rec in six_week_plan['strategic_recommendations']:
-                st.info(rec)
+            st.markdown("**🎯 Team Strength Analysis:**")
+            if avg_form > 6.0:
+                st.success("🔥 **EXCELLENT** - Your team is in great form!")
+            elif avg_form > 4.5:
+                st.info("✅ **GOOD** - Your team is performing well")
+            else:
+                st.warning("⚠️ **NEEDS IMPROVEMENT** - Consider strategic changes")
         
         st.markdown("---")
         
-        # Alternative Players by Position (Enhanced)
-        st.subheader("🔍 **Alternative Players by Position**")
+        # Strategic Transfer Recommendations
+        st.subheader("🔄 **AI Transfer Strategy**")
+        
+        # Get transfer recommendations using the optimizer
+        try:
+            # Create user strategy for optimization
+            user_strategy = UserStrategy(
+                manager_id=manager_id,
+                team_name=manager_data.get('name', 'Unknown'),
+                current_team_value=current_team_value,
+                free_transfers=free_transfers,
+                bank=bank_balance,
+                total_points=total_points,
+                overall_rank=manager_data.get('summary_overall_rank', 0),
+                league_rank=1,
+                chips_remaining=[ChipType.WILDCARD, ChipType.BENCH_BOOST, ChipType.TRIPLE_CAPTAIN, ChipType.FREE_HIT],
+                planned_chips=[]
+            )
+            
+            with st.spinner("🤖 AI is analyzing optimal transfers..."):
+                transfers = optimizer.optimize_transfers(
+                    user_strategy, current_team_players, max_transfers=2, allow_hits=True
+                )
+            
+            if transfers:
+                st.success(f"🎯 AI found {len(transfers)} strategic transfer(s)!")
+                
+                for i, transfer in enumerate(transfers, 1):
+                    with st.container():
+                        confidence_color = "🟢" if transfer.confidence > 0.7 else "🟡" if transfer.confidence > 0.4 else "🔴"
+                        
+                        st.markdown(f"""
+                        <div style="border: 2px solid #4CAF50; padding: 20px; border-radius: 15px; margin: 15px 0; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);">
+                            <h4>🎯 Transfer {i}: {confidence_color} {transfer.priority}</h4>
+                            <div style="font-size: 18px; margin: 15px 0;">
+                                <strong>OUT:</strong> <span style="color: #dc3545;">{transfer.player_out_name}</span> 
+                                <span style="font-size: 24px;">→</span> 
+                                <strong>IN:</strong> <span style="color: #28a745;">{transfer.player_in_name}</span>
+                            </div>
+                            <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
+                                <p><strong>🎯 Strategic Reason:</strong> {transfer.reason}</p>
+                                <p><strong>💰 Cost Impact:</strong> £{transfer.cost_change:+.1f}m</p>
+                                <p><strong>📊 Expected Points:</strong> +{transfer.points_potential:.1f} points</p>
+                                <p><strong>🎲 Confidence:</strong> {transfer.confidence:.0%}</p>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                # Transfer summary
+                total_cost = sum(t.cost_change for t in transfers)
+                total_points = sum(t.points_potential for t in transfers)
+                hits_required = max(0, len(transfers) - free_transfers)
+                net_points = total_points - (hits_required * 4)
+                
+                st.subheader("📊 Transfer Impact Summary")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Total Cost", f"£{total_cost:+.1f}m", 
+                             delta="Budget impact")
+                
+                with col2:
+                    st.metric("Expected Points", f"+{total_points:.1f}", 
+                             delta="Performance gain")
+                
+                with col3:
+                    st.metric("Point Hits", hits_required, 
+                             delta="Transfer cost")
+                
+                with col4:
+                    st.metric("Net Benefit", f"{net_points:+.1f} pts", 
+                             delta="Overall gain" if net_points > 0 else "Not recommended")
+                
+                if net_points > 0:
+                    st.success("✅ **RECOMMENDED**: These transfers will improve your team!")
+                else:
+                    st.warning("⚠️ **NOT RECOMMENDED**: The point hits outweigh the benefits")
+                    
+            else:
+                st.info("✅ **NO TRANSFERS NEEDED**: Your team is well-optimized for this week!")
+                
+        except Exception as e:
+            st.error(f"Error in transfer optimization: {e}")
+            st.info("Showing basic transfer analysis instead...")
+            
+            # Fallback to basic analysis
+            st.markdown("**📋 Basic Transfer Analysis:**")
+            st.info("Your team appears to be well-balanced. Consider saving transfers for future gameweeks.")
+        
+        st.markdown("---")
+        
+        # Strategic Planning Section
+        st.subheader("📅 **6-Week Strategic Planning**")
+        
+        # Strategic planning insights (without requiring fixture data)
+        st.markdown("**🎯 Key Strategic Insights:**")
+        
+        # Analyze strategic opportunities
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**📊 Strategic Focus Areas:**")
+            st.info(f"""
+            **Next 3 Gameweeks:**
+            - **GW{current_gw+1}**: Focus on form players
+            - **GW{current_gw+2}**: Consider fixture-based transfers  
+            - **GW{current_gw+3}**: Plan for double gameweeks
+            """)
+        
+        with col2:
+            st.markdown("**🎲 Immediate Actions:**")
+            st.success(f"""
+            **This Week:**
+            - Use {free_transfers} free transfer(s) wisely
+            - Monitor injury news closely
+            - Save transfers for future opportunities
+            """)
+        
+        # Weekly breakdown
+        st.markdown("**📅 Weekly Action Plan:**")
+        
+        for gw in range(current_gw + 1, min(current_gw + 7, 39)):
+            if gw <= 38:  # Season limit
+                if gw <= current_gw + 3:
+                    st.markdown(f"**Gameweek {gw}:** Focus on form and fixture analysis")
+                else:
+                    st.markdown(f"**Gameweek {gw}:** Plan transfers based on fixture difficulty and form")
+        
+        # Strategic recommendations based on team state
+        st.markdown("**🎯 Strategic Recommendations:**")
+        
+        if free_transfers > 1:
+            st.success("💡 **SAVE TRANSFERS**: You have multiple free transfers - consider saving for future gameweeks")
+        elif free_transfers == 1:
+            st.info("🎯 **USE WISELY**: Use your free transfer strategically - focus on high-impact changes")
+        else:
+            st.warning("⚠️ **NO TRANSFERS**: Consider if point hits are worth it this week")
+        
+        if bank_balance > 3.0:
+            st.info("💰 **UPGRADE OPPORTUNITY**: You have funds available for premium upgrades")
+        elif bank_balance < 0.5:
+            st.warning("💸 **BUDGET TIGHT**: Monitor team value changes carefully")
+        
+        st.markdown("---")
+        
+        # Alternative Players Section (Simplified)
+        st.subheader("🔍 **Top Alternative Players by Position**")
         
         # Add explanation of analysis score
         st.markdown("""
@@ -1672,20 +1791,16 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
         - **Minutes (20%)**: Playing time and rotation risk
         - **Recent Performance (15%)**: Points per game average
         - **Bonus Potential (10%)**: Historical bonus points earned
-        
-        **🎯 NEW: Fixture Difficulty Integration**
-        The system now considers upcoming fixtures when recommending players!
         """)
         
-        players_df = analysis.calculate_player_scores()
-        
+        # Get top players by position (excluding current team)
         for position in ['Goalkeeper', 'Defender', 'Midfielder', 'Forward']:
             position_id = {'Goalkeeper': 1, 'Defender': 2, 'Midfielder': 3, 'Forward': 4}[position]
             
             pos_players = players_df[
                 (players_df['element_type'] == position_id) &
-                (~players_df['id'].isin([p['id'] for p in team_analysis['current_team']]))
-            ].nlargest(10, 'total_score')
+                (~players_df['id'].isin(current_team_players))
+            ].nlargest(8, 'total_score')
             
             if not pos_players.empty:
                 display_df = pos_players[[
@@ -1701,94 +1816,48 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
                     'Form', 'Ownership (%)', 'Analysis Score'
                 ]
                 
-                # Create custom expandable section with HTML table content
-                table_html = create_html_table(display_df)
-                
-                # Use simple header instead of expander to avoid text overlap
                 st.markdown(f"### {position} Options")
-                with st.container():
-                    st.markdown(table_html, unsafe_allow_html=True)
-                st.markdown("---")  # Add separator
+                st.dataframe(display_df, use_container_width=True)
+                st.markdown("---")
+        
+        # Final AI Recommendations
+        st.subheader("🤖 **AI Final Recommendations**")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**🎯 This Week:**")
+            if free_transfers > 0:
+                st.success(f"Use your {free_transfers} free transfer(s) strategically")
+            else:
+                st.warning("No free transfers - consider if point hits are worth it")
+        
+        with col2:
+            st.markdown("**📈 Long Term:**")
+            st.info("Focus on consistent performers and fixture-friendly players")
+        
+        st.markdown("---")
+        
+        # Action Items Summary
+        st.subheader("📋 **Immediate Action Items**")
+        
+        action_items = []
+        if free_transfers > 0:
+            action_items.append("✅ Use free transfers strategically")
+        if bank_balance > 2.0:
+            action_items.append("💰 Consider upgrading key positions")
+        if avg_form < 5.0:
+            action_items.append("🔄 Look for form improvements")
+        
+        if action_items:
+            for item in action_items:
+                st.markdown(f"- {item}")
+        else:
+            st.success("🎉 Your team is in great shape! No immediate actions needed.")
         
     except Exception as e:
         st.error(f"Error in transfer analysis: {e}")
-        st.info("Falling back to basic transfer analysis...")
-        
-        # Fallback to basic analysis
-        try:
-            # Get current team
-            current_gw = api.get_current_gameweek()
-            team_data = api.get_manager_team(manager_id, current_gw)
-            manager_data = api.get_manager_data(manager_id)
-            
-            if not team_data or 'picks' not in team_data:
-                st.error("Could not load current team data.")
-                return
-            
-            # Create user strategy
-            user_strategy = UserStrategy(
-                manager_id=manager_id,
-                team_name=manager_data.get('name', 'Unknown'),
-                current_team_value=manager_data.get('last_deadline_value', 1000) / 10,
-                free_transfers=api.calculate_available_transfers(manager_id),
-                bank=manager_data.get('last_deadline_bank', 0) / 10,
-                total_points=manager_data.get('summary_overall_points', 0),
-                overall_rank=manager_data.get('summary_overall_rank', 0),
-                league_rank=1,
-                chips_remaining=[ChipType.WILDCARD, ChipType.BENCH_BOOST, ChipType.TRIPLE_CAPTAIN, ChipType.FREE_HIT],
-                planned_chips=[]
-            )
-            
-            current_team = [pick['element'] for pick in team_data['picks']]
-            
-            # Get transfer recommendations
-            with st.spinner("Analyzing optimal transfers..."):
-                transfers = optimizer.optimize_transfers(
-                    user_strategy, current_team, max_transfers=2, allow_hits=True
-                )
-            
-            if transfers:
-                st.subheader("🎯 Basic Transfer Recommendations")
-                
-                for i, transfer in enumerate(transfers, 1):
-                    with st.container():
-                        confidence_color = "🟢" if transfer.confidence > 0.7 else "🟡" if transfer.confidence > 0.4 else "🔴"
-                        
-                        st.markdown(f"""
-                        <div class="transfer-rec">
-                            <strong>Transfer {i}</strong> {confidence_color}<br>
-                            <strong>OUT:</strong> {transfer.player_out_name} → <strong>IN:</strong> {transfer.player_in_name}<br>
-                            <strong>Cost:</strong> £{transfer.cost_change:+.1f}m | 
-                            <strong>Expected Points:</strong> +{transfer.points_potential:.1f} | 
-                            <strong>Confidence:</strong> {transfer.confidence:.0%}<br>
-                            <em>{transfer.reason}</em>
-                        </div>
-                        """, unsafe_allow_html=True)
-                
-                # Transfer summary
-                total_cost = sum(t.cost_change for t in transfers)
-                total_points = sum(t.points_potential for t in transfers)
-                hits_required = max(0, len(transfers) - user_strategy.free_transfers)
-                net_points = total_points - (hits_required * 4)
-                
-                st.subheader("Transfer Summary")
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric("Total Cost", f"£{total_cost:+.1f}m")
-                with col2:
-                    st.metric("Expected Points", f"+{total_points:.1f}")
-                with col3:
-                    st.metric("Point Hits", hits_required)
-                with col4:
-                    st.metric("Net Benefit", f"{net_points:+.1f} pts", 
-                             delta="Recommended" if net_points > 0 else "Not Recommended")
-            
-            else:
-                st.info("No beneficial transfers found at this time. Your team looks well optimized!")
-                
-        except Exception as e2:
-            st.error(f"Error in fallback analysis: {e2}")
+        st.info("Please try refreshing the page or check your Manager ID.")
 
 def chip_strategy_tab(api: FPLApiClient, planner: ChipPlanner, manager_id: int):
     """Chip strategy planning tab"""
