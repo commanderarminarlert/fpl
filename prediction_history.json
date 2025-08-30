@@ -1,0 +1,50 @@
+{
+  "predictions": [
+    {
+      "prediction_id": "points_1_2_20250830",
+      "player_id": "1",
+      "gameweek": 2,
+      "prediction_type": "points",
+      "predicted_value": 56.16,
+      "actual_value": null,
+      "confidence": 0.5,
+      "factors_used": {
+        "form": 8.0,
+        "value_per_point": 0.34375,
+        "minutes": "180",
+        "fixture_difficulty": 3.3333333333333335,
+        "total_points": "16",
+        "selected_by_percent": "21.2"
+      },
+      "timestamp": "2025-08-30 10:23:44.430928"
+    },
+    {
+      "prediction_id": "points_1_3_20250830",
+      "player_id": "1",
+      "gameweek": 3,
+      "prediction_type": "points",
+      "predicted_value": 53.04,
+      "actual_value": null,
+      "confidence": 0.5,
+      "factors_used": {
+        "form": 8.0,
+        "value_per_point": 0.34375,
+        "minutes": "180",
+        "fixture_difficulty": 3.5,
+        "total_points": "16",
+        "selected_by_percent": "21.2"
+      },
+      "timestamp": "2025-08-30 10:52:27.830660"
+    }
+  ],
+  "factor_weights": {
+    "form_weight": 0.3,
+    "value_weight": 0.25,
+    "minutes_weight": 0.2,
+    "recent_weight": 0.15,
+    "bonus_weight": 0.1,
+    "fixture_difficulty_weight": 0.15,
+    "injury_risk_weight": 0.1
+  },
+  "last_updated": "2025-08-30T10:52:27.830719"
+}

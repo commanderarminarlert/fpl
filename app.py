@@ -1057,11 +1057,9 @@ def load_fpl_data():
         optimizer = TransferOptimizer(api, analysis)
         planner = ChipPlanner(api, analysis)
         
-        # Force fresh data update - no cache
-        analysis.update_data()
-        
-        # Force refresh bootstrap data
+        # Force refresh bootstrap data FIRST, then analysis with force_refresh
         api.get_bootstrap_data(force_refresh=True)
+        analysis.update_data(force_refresh=True)
         
         return api, analysis, optimizer, planner
     except Exception as e:
@@ -1127,6 +1125,13 @@ def main():
     st.title("⚽ FPL Assistant Pro")
     st.markdown("**Your Professional Fantasy Premier League Analysis & Strategy Tool**")
     
+    # Global refresh and last synced timestamp
+    col_hdr_1, col_hdr_2 = st.columns([3, 1])
+    with col_hdr_2:
+        if st.button("🔄 Refresh", help="Force live reload from FPL API"):
+            st.cache_data.clear()
+            st.rerun()
+
     # Load data
     with st.spinner("Loading FPL data..."):
         api, analysis, optimizer, planner = load_fpl_data()
@@ -1135,6 +1140,10 @@ def main():
         st.error("Failed to load FPL data. Please check your internet connection and try again.")
         return
     
+    # Show last synced timestamp
+    from datetime import datetime, timezone
+    st.caption(f"Last synced: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+
     # Sidebar for user inputs
     st.sidebar.subheader("Your Team Details")
     
@@ -1395,16 +1404,17 @@ def dashboard_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transf
                 delta="Available"
             )
         
-        # Current team
+        # Current team (LIVE, including pending transfers when applicable)
         try:
-            team_data = api.get_manager_team(manager_id, current_gw)
+            live_team_state = api.get_current_team_with_transfers(manager_id)
+            team_data = live_team_state.get('team_data')
             if team_data and 'picks' in team_data:
                 
-                st.subheader("Current Team")
+                st.subheader("Current Team (Live)")
                 
                 # Get player details - ensure data is loaded
                 if analysis.players_df is None:
-                    analysis.update_data()
+                    analysis.update_data(force_refresh=True)
                 players_df = analysis.players_df
                 team_picks = team_data['picks']
                 
@@ -1732,27 +1742,41 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
                                 'reason': "; ".join(reasons) if reasons else "Better overall performance expected"
                             })
                 
-                # Sort by priority and limit to max_transfers
-                smart_transfers = sorted(smart_transfers, key=lambda x: x['priority_score'], reverse=True)[:max_transfers]
+                # Sort by priority
+                smart_transfers = sorted(smart_transfers, key=lambda x: x['priority_score'], reverse=True)
+                
+                # Only suggest up to available free transfers (no hits)
+                num_allowed = max(0, min(free_transfers, max_transfers))
+                
+                # Greedy selection while respecting bank balance
+                selected_transfers = []
+                running_bank = float(bank_balance)
+                for t in smart_transfers:
+                    if len(selected_transfers) >= num_allowed:
+                        break
+                    new_bank = running_bank - t['cost_change']
+                    if new_bank >= -1e-9:
+                        selected_transfers.append(t)
+                        running_bank = new_bank
+                
+                smart_transfers = selected_transfers
                 
                 if smart_transfers:
                     for i, transfer in enumerate(smart_transfers, 1):
-                        priority_color = "#e8f5e8" if i <= free_transfers else "#fff3cd"  # Green for free, yellow for hits
+                        priority_color = "#e8f5e8"
                         
                         st.markdown(f"""
                         <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin: 10px 0; background: {priority_color};">
-                            <h4>Transfer {i} {'(Free)' if i <= free_transfers else '(-4 pts)'}</h4>
+                            <h4>Transfer {i} (Free)</h4>
                             <p><strong>OUT:</strong> {transfer['player_out_name']} → <strong>IN:</strong> {transfer['player_in_name']}</p>
                             <p><strong>Cost:</strong> £{transfer['cost_change']:+.1f}m | <strong>Expected:</strong> +{transfer['expected_points']:.1f} pts over 6 weeks</p>
                             <p><strong>Why:</strong> {transfer['reason']}</p>
                         </div>
                         """, unsafe_allow_html=True)
                     
-                    # Smart summary
+                    # Summary for free-only plan
                     total_cost = sum(t['cost_change'] for t in smart_transfers)
                     total_expected = sum(t['expected_points'] for t in smart_transfers)
-                    hits_required = max(0, len(smart_transfers) - free_transfers)
-                    net_benefit = total_expected - (hits_required * 4)
                     
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -1760,13 +1784,9 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
                     with col2:
                         st.metric("6-Week Expected", f"+{total_expected:.1f} pts")
                     with col3:
-                        color = "normal" if net_benefit >= 0 else "inverse"
-                        st.metric("Net Benefit", f"{net_benefit:+.1f} pts", delta_color=color)
-                    
-                    if hits_required > 0:
-                        st.warning(f"⚠️ This plan requires {hits_required} hit(s) (-{hits_required*4} points)")
+                        st.metric("Hits", "0 (no point hits)")
                 else:
-                    st.info("🎯 Your current team is well-optimized! No urgent transfers needed.")
+                    st.info("🎯 No free-transfer upgrades identified within budget for the next gameweek.")
                     
         except Exception as e:
             st.error(f"Error in intelligent transfer analysis: {e}")
