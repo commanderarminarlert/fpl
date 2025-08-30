@@ -1125,6 +1125,13 @@ def main():
     st.title("⚽ FPL Assistant Pro")
     st.markdown("**Your Professional Fantasy Premier League Analysis & Strategy Tool**")
     
+    # Global refresh and last synced timestamp
+    col_hdr_1, col_hdr_2 = st.columns([3, 1])
+    with col_hdr_2:
+        if st.button("🔄 Refresh", help="Force live reload from FPL API"):
+            st.cache_data.clear()
+            st.rerun()
+
     # Load data
     with st.spinner("Loading FPL data..."):
         api, analysis, optimizer, planner = load_fpl_data()
@@ -1133,6 +1140,10 @@ def main():
         st.error("Failed to load FPL data. Please check your internet connection and try again.")
         return
     
+    # Show last synced timestamp
+    from datetime import datetime, timezone
+    st.caption(f"Last synced: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+
     # Sidebar for user inputs
     st.sidebar.subheader("Your Team Details")
     
