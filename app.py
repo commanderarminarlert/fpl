@@ -1282,7 +1282,7 @@ def main():
         dashboard_tab(api, analysis, optimizer, manager_id, league_id)
     
     with tab2:
-        transfer_tab(api, analysis, optimizer, manager_id)
+        transfer_tab(api, analysis, optimizer, manager_id, max_transfers)
     
     with tab3:
         chip_strategy_tab(api, planner, manager_id)
@@ -1527,12 +1527,12 @@ def dashboard_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transf
     except Exception as e:
         st.error(f"Error loading dashboard: {e}")
 
-def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: TransferOptimizer, manager_id: int):
-    """AI-Driven Transfer Analysis & Action Plan"""
-    st.header("🤖 AI Transfer Intelligence & Action Plan")
+def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: TransferOptimizer, manager_id: int, max_transfers: int):
+    """Transfer Analysis & Recommendations"""
+    st.header("🔄 Transfer Analysis")
     
     if not manager_id:
-        st.warning("Please enter your Manager ID to get AI-powered transfer recommendations.")
+        st.warning("Please enter your Manager ID to get transfer recommendations.")
         return
     
     try:
@@ -1546,7 +1546,6 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
             return
         
         # Calculate real-time metrics
-        current_team_value = 0
         if hasattr(api, 'enhanced_api') and api.enhanced_api:
             try:
                 bank_balance = api.enhanced_api.calculate_accurate_bank_balance(manager_id)[0]
@@ -1561,22 +1560,21 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
             current_team_value = manager_data.get('last_deadline_value', 1000) / 10
             free_transfers = api.calculate_available_transfers(manager_id)
         
-        # Simple Team Status
+        # 1. Team Status
         col1, col2, col3 = st.columns(3)
-        
         with col1:
             st.metric("Team Value", f"£{current_team_value:.1f}m")
-        
         with col2:
             st.metric("Bank Balance", f"£{bank_balance:.1f}m")
-        
         with col3:
             st.metric("Free Transfers", free_transfers)
         
         st.markdown("---")
         
-        # AI Transfer Recommendations
-        st.subheader("🎯 **AI Transfer Recommendations**")
+        # 2. Recommended Player Transfers
+        st.subheader("🎯 **Recommended Transfers**")
+        
+        # Use max transfers from sidebar slider
         
         try:
             # Create user strategy for optimization
@@ -1595,35 +1593,22 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
             
             current_team_players = [pick['element'] for pick in team_data['picks']]
             
-            with st.spinner("🤖 AI analyzing optimal transfers..."):
+            with st.spinner("Analyzing optimal transfers..."):
                 transfers = optimizer.optimize_transfers(
-                    user_strategy, current_team_players, max_transfers=2, allow_hits=True
+                    user_strategy, current_team_players, max_transfers=max_transfers, allow_hits=True
                 )
             
             if transfers:
-                st.success(f"🎯 AI found {len(transfers)} strategic transfer(s)!")
-                
                 for i, transfer in enumerate(transfers, 1):
-                    confidence_color = "🟢" if transfer.confidence > 0.7 else "🟡" if transfer.confidence > 0.4 else "🔴"
-                    
                     st.markdown(f"""
-                    <div style="border: 2px solid #4CAF50; padding: 20px; border-radius: 15px; margin: 15px 0; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);">
-                        <h4>🎯 Transfer {i}: {confidence_color} {transfer.priority}</h4>
-                        <div style="font-size: 18px; margin: 15px 0;">
-                            <strong>OUT:</strong> <span style="color: #dc3545;">{transfer.player_out_name}</span> 
-                            <span style="font-size: 24px;">→</span> 
-                            <strong>IN:</strong> <span style="color: #28a745;">{transfer.player_in_name}</span>
-                        </div>
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                            <p><strong>🎯 Reason:</strong> {transfer.reason}</p>
-                            <p><strong>💰 Cost:</strong> £{transfer.cost_change:+.1f}m</p>
-                            <p><strong>📊 Expected Points:</strong> +{transfer.points_potential:.1f}</p>
-                            <p><strong>🎲 Confidence:</strong> {transfer.confidence:.0%}</p>
-                        </div>
+                    <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin: 10px 0; background: white;">
+                        <h4>Transfer {i}</h4>
+                        <p><strong>OUT:</strong> {transfer.player_out_name} → <strong>IN:</strong> {transfer.player_in_name}</p>
+                        <p><strong>Reason:</strong> {transfer.reason}</p>
                     </div>
                     """, unsafe_allow_html=True)
                 
-                # Transfer impact summary
+                # Transfer summary
                 total_cost = sum(t.cost_change for t in transfers)
                 total_points = sum(t.points_potential for t in transfers)
                 hits_required = max(0, len(transfers) - free_transfers)
@@ -1636,89 +1621,121 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
                     st.metric("Expected Points", f"+{total_points:.1f}")
                 with col3:
                     st.metric("Net Benefit", f"{net_points:+.1f} pts")
-                
-                if net_points > 0:
-                    st.success("✅ **RECOMMENDED**: These transfers will improve your team!")
-                else:
-                    st.warning("⚠️ **NOT RECOMMENDED**: Point hits outweigh benefits")
                     
             else:
-                st.info("✅ **NO TRANSFERS NEEDED**: Your team is well-optimized!")
+                st.info("No beneficial transfers found at this time.")
                 
         except Exception as e:
             st.error(f"Error in transfer optimization: {e}")
-            st.info("Showing basic transfer analysis instead...")
         
         st.markdown("---")
         
-        # Top Alternative Players by Position
-        st.subheader("🔍 **Top Alternative Players by Position**")
+        # 3. Good Potential Signings Table with Filters
+        st.subheader("🔍 **Good Potential Signings**")
         
-        # Get players data for analysis
+        # Get players data
         players_df = analysis.calculate_player_scores()
+        current_team_players = [pick['element'] for pick in team_data['picks']]
         
-        # Custom CSS for tables
-        st.markdown("""
-        <style>
-        .stDataFrame {
-            background-color: white !important;
-        }
-        .stDataFrame table {
-            background-color: white !important;
-            color: black !important;
-        }
-        .stDataFrame th, .stDataFrame td {
-            background-color: white !important;
-            color: black !important;
-            border: 1px solid #ddd !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
+        # Filter out current team players
+        available_players = players_df[~players_df['id'].isin(current_team_players)].copy()
         
-        for position in ['Goalkeeper', 'Defender', 'Midfielder', 'Forward']:
-            position_id = {'Goalkeeper': 1, 'Defender': 2, 'Midfielder': 3, 'Forward': 4}[position]
+        # Filters
+        col1, col2 = st.columns(2)
+        with col1:
+            position_filter = st.selectbox(
+                "Filter by Position",
+                ["All", "Goalkeeper", "Defender", "Midfielder", "Forward"]
+            )
+        with col2:
+            team_filter = st.selectbox(
+                "Filter by Team",
+                ["All"] + sorted(available_players['team_name'].unique().tolist())
+            )
+        
+        # Apply filters
+        filtered_players = available_players.copy()
+        
+        if position_filter != "All":
+            position_id = {'Goalkeeper': 1, 'Defender': 2, 'Midfielder': 3, 'Forward': 4}[position_filter]
+            filtered_players = filtered_players[filtered_players['element_type'] == position_id]
+        
+        if team_filter != "All":
+            filtered_players = filtered_players[filtered_players['team_name'] == team_filter]
+        
+        # Get top players
+        top_players = filtered_players.nlargest(15, 'total_score')
+        
+        if not top_players.empty:
+            display_df = top_players[[
+                'web_name', 'team_name', 'value', 'total_points', 
+                'form_float', 'selected_by_percent', 'total_score'
+            ]].copy()
             
-            pos_players = players_df[
-                (players_df['element_type'] == position_id) &
-                (~players_df['id'].isin(current_team_players))
-            ].nlargest(6, 'total_score')
+            display_df['total_score'] = display_df['total_score'].round(1)
+            display_df.columns = [
+                'Player', 'Team', 'Price (£m)', 'Points', 
+                'Form', 'Ownership (%)', 'Score'
+            ]
             
-            if not pos_players.empty:
-                display_df = pos_players[[
-                    'web_name', 'team_name', 'value', 'total_points', 
-                    'form_float', 'total_score'
-                ]].copy()
-                
-                # Round analysis score to 1 decimal place
-                display_df['total_score'] = display_df['total_score'].round(1)
-                
-                display_df.columns = [
-                    'Player', 'Team', 'Price (£m)', 'Points', 
-                    'Form', 'Score'
-                ]
-                
-                st.markdown(f"### {position} Options")
-                
-                # Apply custom styling to ensure white background and black text
-                styled_df = display_df.style.set_properties(**{
-                    'background-color': 'white',
-                    'color': 'black',
-                    'border': '1px solid #ddd'
-                })
-                
-                st.dataframe(styled_df, width='stretch')
-                st.markdown("---")
-        
-        # Simple Action Items
-        st.subheader("📋 **Action Items**")
-        
-        if free_transfers > 0:
-            st.success(f"✅ Use your {free_transfers} free transfer(s) on the recommendations above")
+            # Apply styling for white background and black text
+            st.markdown("""
+            <style>
+            div[data-testid="stDataFrame"] > div {
+                background-color: white !important;
+            }
+            .stDataFrame {
+                background-color: white !important;
+            }
+            .stDataFrame table {
+                background-color: white !important;
+                color: black !important;
+            }
+            .stDataFrame th {
+                background-color: white !important;
+                color: black !important;
+                border: 1px solid #ddd !important;
+            }
+            .stDataFrame td {
+                background-color: white !important;
+                color: black !important;
+                border: 1px solid #ddd !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            st.dataframe(display_df, width='stretch')
         else:
-            st.warning("⚠️ No free transfers - consider if point hits are worth it")
+            st.info("No players found with current filters.")
         
-        if bank_balance > 2.0:
-            st.info("💰 You have funds available for premium upgrades")
+        st.markdown("---")
+        
+        # 4. Hidden Gem Transfers
+        st.subheader("💎 **Hidden Gem Transfers**")
+        st.caption("Good potential but slightly risky")
+        
+        # Find hidden gems - players with good stats but low ownership
+        hidden_gems = available_players[
+            (available_players['selected_by_percent'] < 10.0) &  # Low ownership
+            (available_players['total_score'] > 60) &  # Good score
+            (available_players['value'] < 8.0)  # Affordable
+        ].nlargest(8, 'total_score')
+        
+        if not hidden_gems.empty:
+            gems_df = hidden_gems[[
+                'web_name', 'team_name', 'value', 'total_points', 
+                'form_float', 'selected_by_percent', 'total_score'
+            ]].copy()
+            
+            gems_df['total_score'] = gems_df['total_score'].round(1)
+            gems_df.columns = [
+                'Player', 'Team', 'Price (£m)', 'Points', 
+                'Form', 'Ownership (%)', 'Score'
+            ]
+            
+            st.dataframe(gems_df, width='stretch')
+        else:
+            st.info("No hidden gems found at this time.")
         
     except Exception as e:
         st.error(f"Error in transfer analysis: {e}")
