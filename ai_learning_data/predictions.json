@@ -1,0 +1,16 @@
+[
+  {
+    "prediction_id": "936801_2_1756535759.820509",
+    "timestamp": "2025-08-30T16:35:59.820514",
+    "gameweek": 2,
+    "player_id": 936801,
+    "player_name": "Manager_936801",
+    "predicted_points": 0,
+    "actual_points": null,
+    "prediction_factors": {
+      "data_quality": 1.0
+    },
+    "accuracy_score": null,
+    "model_version": "1.0"
+  }
+]

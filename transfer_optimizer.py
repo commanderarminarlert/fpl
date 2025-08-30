@@ -371,46 +371,84 @@ class ChipPlanner:
         
         # Analyze upcoming fixtures and double gameweeks
         fixture_analysis = self._analyze_upcoming_fixtures(remaining_gws)
+        double_gameweeks = self._identify_double_gameweeks(fixture_analysis, current_gw)
+        blank_gameweeks = self._identify_blank_gameweeks(fixture_analysis, current_gw)
         
-        # Plan Wildcard usage
-        if ChipType.WILDCARD in user_strategy.chips_remaining:
-            wc_gw = self._plan_wildcard(fixture_analysis, current_gw)
-            strategies.append(ChipStrategy(
-                chip_type=ChipType.WILDCARD,
-                planned_gameweek=wc_gw,
-                priority=1,
-                reason="Optimal team restructuring before good fixture run"
-            ))
+        # Plan Wildcard usage (2 available)
+        try:
+            wildcards_remaining = user_strategy.chips_remaining.get(ChipType.WILDCARD, 0)
+        except AttributeError:
+            # Fallback for old-style chips_remaining list
+            wildcards_remaining = 2 if ChipType.WILDCARD in getattr(user_strategy, 'chips_remaining', []) else 0
         
-        # Plan Bench Boost
-        if ChipType.BENCH_BOOST in user_strategy.chips_remaining:
-            bb_gw = self._plan_bench_boost(fixture_analysis, current_gw)
-            strategies.append(ChipStrategy(
-                chip_type=ChipType.BENCH_BOOST,
-                planned_gameweek=bb_gw,
-                priority=2,
-                reason="Double gameweek with full bench participation"
-            ))
+        if wildcards_remaining > 0:
+            wc_plans = self._plan_multiple_wildcards(fixture_analysis, current_gw, wildcards_remaining)
+            for i, wc_gw in enumerate(wc_plans):
+                priority = 1 if i == 0 else 5  # First wildcard high priority, second lower
+                reason = "Optimal team restructuring before good fixture run" if i == 0 else "Late season squad overhaul"
+                strategies.append(ChipStrategy(
+                    chip_type=ChipType.WILDCARD,
+                    planned_gameweek=wc_gw,
+                    priority=priority,
+                    reason=reason
+                ))
         
-        # Plan Triple Captain
-        if ChipType.TRIPLE_CAPTAIN in user_strategy.chips_remaining:
-            tc_gw = self._plan_triple_captain(fixture_analysis, current_gw)
-            strategies.append(ChipStrategy(
-                chip_type=ChipType.TRIPLE_CAPTAIN,
-                planned_gameweek=tc_gw,
-                priority=3,
-                reason="Premium player with excellent fixture"
-            ))
+        # Plan Bench Boost usage (2 available)
+        try:
+            bb_remaining = user_strategy.chips_remaining.get(ChipType.BENCH_BOOST, 0)
+        except AttributeError:
+            bb_remaining = 2 if ChipType.BENCH_BOOST in getattr(user_strategy, 'chips_remaining', []) else 0
         
-        # Plan Free Hit
-        if ChipType.FREE_HIT in user_strategy.chips_remaining:
-            fh_gw = self._plan_free_hit(fixture_analysis, current_gw)
-            strategies.append(ChipStrategy(
-                chip_type=ChipType.FREE_HIT,
-                planned_gameweek=fh_gw,
-                priority=4,
-                reason="Blank gameweek or unique fixture opportunity"
-            ))
+        if bb_remaining > 0:
+            bb_plans = self._plan_multiple_bench_boosts(double_gameweeks, fixture_analysis, current_gw, bb_remaining)
+            for i, bb_gw in enumerate(bb_plans):
+                priority = 2 if i == 0 else 6
+                reason = "Prime double gameweek with full bench participation" if i == 0 else "Secondary double gameweek opportunity"
+                strategies.append(ChipStrategy(
+                    chip_type=ChipType.BENCH_BOOST,
+                    planned_gameweek=bb_gw,
+                    priority=priority,
+                    reason=reason
+                ))
+        
+        # Plan Triple Captain usage (2 available)
+        try:
+            tc_remaining = user_strategy.chips_remaining.get(ChipType.TRIPLE_CAPTAIN, 0)
+        except AttributeError:
+            tc_remaining = 2 if ChipType.TRIPLE_CAPTAIN in getattr(user_strategy, 'chips_remaining', []) else 0
+        
+        if tc_remaining > 0:
+            tc_plans = self._plan_multiple_triple_captains(double_gameweeks, fixture_analysis, current_gw, tc_remaining)
+            for i, tc_gw in enumerate(tc_plans):
+                priority = 3 if i == 0 else 7
+                reason = "Premium captain pick in ideal double gameweek" if i == 0 else "Secondary captain opportunity"
+                strategies.append(ChipStrategy(
+                    chip_type=ChipType.TRIPLE_CAPTAIN,
+                    planned_gameweek=tc_gw,
+                    priority=priority,
+                    reason=reason
+                ))
+        
+        # Plan Free Hit usage (2 available)
+        try:
+            fh_remaining = user_strategy.chips_remaining.get(ChipType.FREE_HIT, 0)
+        except AttributeError:
+            fh_remaining = 2 if ChipType.FREE_HIT in getattr(user_strategy, 'chips_remaining', []) else 0
+        
+        if fh_remaining > 0:
+            fh_plans = self._plan_multiple_free_hits(blank_gameweeks, fixture_analysis, current_gw, fh_remaining)
+            for i, fh_gw in enumerate(fh_plans):
+                priority = 4 if i == 0 else 8
+                reason = "Critical blank gameweek navigation" if i == 0 else "Secondary blank gameweek or fixture exploit"
+                strategies.append(ChipStrategy(
+                    chip_type=ChipType.FREE_HIT,
+                    planned_gameweek=fh_gw,
+                    priority=priority,
+                    reason=reason
+                ))
+        
+        # Sort by priority
+        strategies.sort(key=lambda x: x.priority)
         
         return strategies
     
@@ -456,6 +494,211 @@ class ChipPlanner:
             }
         
         return analysis
+    
+    def _identify_double_gameweeks(self, fixture_analysis: Dict, current_gw: int) -> List[int]:
+        """Identify confirmed and likely double gameweeks"""
+        double_gws = []
+        
+        for gw, data in fixture_analysis.items():
+            # More accurate double gameweek detection
+            if data['total_fixtures'] > 10 or (data['total_fixtures'] > 8 and gw > 25):
+                double_gws.append(gw)
+        
+        # Typical double gameweek periods (historical pattern)
+        # Double gameweeks usually occur in GW25-29 and GW36-37
+        likely_periods = [range(25, 30), range(36, 38)]
+        
+        for period in likely_periods:
+            for gw in period:
+                if gw >= current_gw and gw not in double_gws and gw in fixture_analysis:
+                    # Check if this gameweek has fewer fixtures than normal (indicating postponements)
+                    if fixture_analysis[gw]['total_fixtures'] < 8:
+                        # Look for makeup gameweeks nearby
+                        for makeup_gw in range(gw + 1, min(gw + 5, 39)):
+                            if makeup_gw in fixture_analysis and makeup_gw not in double_gws:
+                                double_gws.append(makeup_gw)
+                                break
+        
+        return sorted(double_gws)
+    
+    def _identify_blank_gameweeks(self, fixture_analysis: Dict, current_gw: int) -> List[int]:
+        """Identify confirmed and likely blank gameweeks"""
+        blank_gws = []
+        
+        for gw, data in fixture_analysis.items():
+            # Blank gameweek detection
+            if data['total_fixtures'] < 5:
+                blank_gws.append(gw)
+        
+        # Check for FA Cup/European fixture clashes (typically GW18, GW28-29)
+        typical_blank_periods = [18, 28, 29]
+        for gw in typical_blank_periods:
+            if gw >= current_gw and gw not in blank_gws and gw in fixture_analysis:
+                if fixture_analysis[gw]['total_fixtures'] < 8:
+                    blank_gws.append(gw)
+        
+        return sorted(blank_gws)
+    
+    def _plan_multiple_wildcards(self, fixture_analysis: Dict, current_gw: int, count: int) -> List[int]:
+        """Plan multiple wildcard usage throughout the season"""
+        wildcards = []
+        
+        if count >= 1:
+            # First wildcard: Early-mid season for team structure (GW8-15)
+            wc1 = self._find_optimal_wildcard_timing(fixture_analysis, current_gw, max(current_gw + 1, 8), 15)
+            wildcards.append(wc1)
+        
+        if count >= 2:
+            # Second wildcard: Later in season for final push (GW25-35)
+            wc2 = self._find_optimal_wildcard_timing(fixture_analysis, max(wildcards[0] + 8, 25), 25, 35)
+            wildcards.append(wc2)
+        
+        return wildcards
+    
+    def _plan_multiple_bench_boosts(self, double_gws: List[int], fixture_analysis: Dict, current_gw: int, count: int) -> List[int]:
+        """Plan multiple bench boost usage"""
+        bench_boosts = []
+        
+        # Sort double gameweeks by attractiveness (difficulty + timing)
+        scored_dgws = []
+        for gw in double_gws:
+            if gw >= current_gw + 1:
+                score = (5 - fixture_analysis[gw]['avg_difficulty']) * 2
+                # Prefer later double gameweeks (more planning time)
+                if gw > current_gw + 3:
+                    score += 1
+                scored_dgws.append((gw, score))
+        
+        scored_dgws.sort(key=lambda x: x[1], reverse=True)
+        
+        for i in range(min(count, len(scored_dgws))):
+            bench_boosts.append(scored_dgws[i][0])
+        
+        # If no double gameweeks available, pick best regular gameweeks
+        while len(bench_boosts) < count:
+            best_gw = self._find_best_regular_gameweek(fixture_analysis, current_gw, bench_boosts)
+            if best_gw:
+                bench_boosts.append(best_gw)
+            else:
+                break
+        
+        return sorted(bench_boosts)
+    
+    def _plan_multiple_triple_captains(self, double_gws: List[int], fixture_analysis: Dict, current_gw: int, count: int) -> List[int]:
+        """Plan multiple triple captain usage"""
+        triple_captains = []
+        
+        # Prefer the best double gameweeks
+        scored_dgws = []
+        for gw in double_gws:
+            if gw >= current_gw + 1:
+                score = (5 - fixture_analysis[gw]['avg_difficulty']) * 3
+                # Heavily favor earlier opportunities (captain form is unpredictable)
+                if gw <= current_gw + 10:
+                    score += 2
+                scored_dgws.append((gw, score))
+        
+        scored_dgws.sort(key=lambda x: x[1], reverse=True)
+        
+        for i in range(min(count, len(scored_dgws))):
+            triple_captains.append(scored_dgws[i][0])
+        
+        # If insufficient double gameweeks, find best single gameweeks
+        while len(triple_captains) < count:
+            best_gw = self._find_best_captain_gameweek(fixture_analysis, current_gw, triple_captains)
+            if best_gw:
+                triple_captains.append(best_gw)
+            else:
+                break
+        
+        return sorted(triple_captains)
+    
+    def _plan_multiple_free_hits(self, blank_gws: List[int], fixture_analysis: Dict, current_gw: int, count: int) -> List[int]:
+        """Plan multiple free hit usage"""
+        free_hits = []
+        
+        # First priority: blank gameweeks
+        for gw in blank_gws:
+            if gw >= current_gw + 1 and len(free_hits) < count:
+                free_hits.append(gw)
+        
+        # Second priority: unique fixture opportunities (teams playing twice when others don't)
+        if len(free_hits) < count:
+            for gw in range(current_gw + 1, 39):
+                if gw not in free_hits and gw in fixture_analysis:
+                    # Look for gameweeks where specific teams have great fixtures
+                    team_fixtures = fixture_analysis[gw]['team_fixtures']
+                    
+                    # Find teams with multiple fixtures and good difficulty
+                    good_opportunities = 0
+                    for team, fixture_count in team_fixtures.items():
+                        if fixture_count > 1:  # Team plays more than once
+                            good_opportunities += 1
+                    
+                    # If many teams have good opportunities, consider for free hit
+                    if good_opportunities >= 6 and fixture_analysis[gw]['avg_difficulty'] < 3.0:
+                        free_hits.append(gw)
+                        if len(free_hits) >= count:
+                            break
+        
+        return sorted(free_hits)
+    
+    def _find_optimal_wildcard_timing(self, fixture_analysis: Dict, current_gw: int, min_gw: int, max_gw: int) -> int:
+        """Find optimal wildcard timing within a range"""
+        best_gw = min_gw
+        best_score = 0
+        
+        for gw in range(max(current_gw + 1, min_gw), min(max_gw + 1, 39)):
+            if gw not in fixture_analysis:
+                continue
+            
+            # Score based on upcoming fixtures after this gameweek
+            score = 0
+            for future_gw in range(gw + 1, min(gw + 6, 39)):  # Next 5 weeks
+                if future_gw in fixture_analysis:
+                    # Prefer easier fixtures and more fixtures
+                    difficulty_score = (5 - fixture_analysis[future_gw]['avg_difficulty']) * 2
+                    fixture_bonus = 2 if fixture_analysis[future_gw]['is_double_gw'] else 0
+                    score += difficulty_score + fixture_bonus
+            
+            if score > best_score:
+                best_score = score
+                best_gw = gw
+        
+        return best_gw
+    
+    def _find_best_regular_gameweek(self, fixture_analysis: Dict, current_gw: int, exclude: List[int]) -> Optional[int]:
+        """Find best regular gameweek for chip usage"""
+        best_gw = None
+        best_score = 0
+        
+        for gw in range(current_gw + 1, 39):
+            if gw not in exclude and gw in fixture_analysis:
+                # Score based on difficulty and fixture count
+                score = (5 - fixture_analysis[gw]['avg_difficulty']) * 2
+                score += fixture_analysis[gw]['total_fixtures'] / 10  # Slight bonus for more fixtures
+                
+                if score > best_score:
+                    best_score = score
+                    best_gw = gw
+        
+        return best_gw
+    
+    def _find_best_captain_gameweek(self, fixture_analysis: Dict, current_gw: int, exclude: List[int]) -> Optional[int]:
+        """Find best gameweek for captain chip"""
+        best_gw = None
+        best_score = 0
+        
+        for gw in range(current_gw + 1, 39):
+            if gw not in exclude and gw in fixture_analysis:
+                # Heavily weight difficulty for captain picks
+                score = (5 - fixture_analysis[gw]['avg_difficulty']) * 4
+                
+                if score > best_score:
+                    best_score = score
+                    best_gw = gw
+        
+        return best_gw
     
     def _plan_wildcard(self, fixture_analysis: Dict, current_gw: int) -> int:
         """Plan optimal wildcard timing"""

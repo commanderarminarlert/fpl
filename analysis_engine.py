@@ -18,6 +18,15 @@ from models import (
     MiniLeagueAnalysis, ChipStrategy
 )
 from fpl_api import FPLApiClient
+try:
+    from learning_engine import (
+        LearningEngine, PredictionRecord, create_prediction_id, 
+        extract_prediction_factors
+    )
+    LEARNING_AVAILABLE = True
+except ImportError:
+    LEARNING_AVAILABLE = False
+    logger.warning("Learning engine not available - running in basic mode")
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +37,15 @@ class AnalysisEngine:
         self.api = api_client
         self.players_df = None
         self.fixtures_df = None
+        # Initialize learning system if available
+        if LEARNING_AVAILABLE:
+            try:
+                self.learning_engine = LearningEngine()
+            except Exception as e:
+                logger.warning(f"Could not initialize learning engine: {e}")
+                self.learning_engine = None
+        else:
+            self.learning_engine = None
         self.teams_df = None
         self._prediction_models = {}
         self._last_model_update = None
@@ -51,26 +69,46 @@ class AnalysisEngine:
             raise
     
     def calculate_player_scores(self) -> pd.DataFrame:
-        """Calculate comprehensive player scores for recommendations"""
+        """Calculate comprehensive player scores for recommendations using learning-enhanced weights"""
         if self.players_df is None:
             self.update_data()
         
         df = self.players_df.copy()
         
-        # Form score (30% weight)
-        df['form_score'] = (df['form_float'] / df['form_float'].max()) * 30
+        # Get updated weights from learning engine (if available)
+        if self.learning_engine:
+            weights = self.learning_engine.factor_weights
+        else:
+            # Default weights if learning engine not available
+            weights = {
+                'form_weight': 0.30,
+                'value_weight': 0.25,
+                'minutes_weight': 0.20,
+                'recent_weight': 0.15,
+                'bonus_weight': 0.10
+            }
         
-        # Value score (25% weight) - higher score for better value
-        df['value_score'] = (1 / df['value_per_point']) / (1 / df['value_per_point']).max() * 25
+        # Calculate scores using learned weights (convert to percentages)
+        form_weight = weights.get('form_weight', 0.30) * 100
+        value_weight = weights.get('value_weight', 0.25) * 100
+        minutes_weight = weights.get('minutes_weight', 0.20) * 100
+        recent_weight = weights.get('recent_weight', 0.15) * 100
+        bonus_weight = weights.get('bonus_weight', 0.10) * 100
         
-        # Minutes played score (20% weight)
-        df['minutes_score'] = (df['minutes'] / df['minutes'].max()) * 20
+        # Form score (adaptive weight)
+        df['form_score'] = (df['form_float'] / df['form_float'].max()) * form_weight
         
-        # Recent performance (15% weight)
-        df['recent_score'] = (df['points_per_game'] / df['points_per_game'].max()) * 15
+        # Value score (adaptive weight) - higher score for better value
+        df['value_score'] = (1 / df['value_per_point']) / (1 / df['value_per_point']).max() * value_weight
         
-        # Bonus potential (10% weight)
-        df['bonus_score'] = (df['bonus'] / df['bonus'].max()) * 10
+        # Minutes played score (adaptive weight)
+        df['minutes_score'] = (df['minutes'] / df['minutes'].max()) * minutes_weight
+        
+        # Recent performance (adaptive weight)
+        df['recent_score'] = (df['points_per_game'] / df['points_per_game'].max()) * recent_weight
+        
+        # Bonus potential (adaptive weight)
+        df['bonus_score'] = (df['bonus'] / df['bonus'].max()) * bonus_weight
         
         # Combine all scores
         df['total_score'] = (
@@ -83,8 +121,8 @@ class AnalysisEngine:
         
         return df
     
-    def predict_player_points(self, player_id: int, gameweeks: int = 6) -> float:
-        """Predict points for a player over the next N gameweeks"""
+    def predict_player_points(self, player_id: int, gameweeks: int = 6, record_prediction: bool = True) -> float:
+        """Predict points for a player over the next N gameweeks with learning integration"""
         if self.players_df is None:
             self.update_data()
         
@@ -104,15 +142,218 @@ class AnalysisEngine:
         # Base prediction on recent form and adjust for difficulty
         base_points = player['points_per_game'] * num_fixtures
         
+        # Use learning-enhanced weights for multipliers (if available)
+        if self.learning_engine:
+            weights = self.learning_engine.factor_weights
+        else:
+            weights = {'fixture_difficulty_weight': 0.15, 'form_weight': 0.30}
+        
+        difficulty_impact = weights.get('fixture_difficulty_weight', 0.15) * 2  # Scale up for multiplier
+        form_impact = weights.get('form_weight', 0.30) * 0.2  # Scale for multiplier
+        
         # Adjust for fixture difficulty (easier fixtures = more points)
-        difficulty_multiplier = 1.0 + (3.0 - avg_difficulty) * 0.1
+        difficulty_multiplier = 1.0 + (3.0 - avg_difficulty) * difficulty_impact
         
         # Adjust for form
-        form_multiplier = 1.0 + (player['form_float'] - 3.0) * 0.05
+        form_multiplier = 1.0 + (player['form_float'] - 3.0) * form_impact
         
         predicted_points = base_points * difficulty_multiplier * form_multiplier
+        predicted_points = max(0, predicted_points)
         
-        return max(0, predicted_points)
+        # Record prediction for learning (if enabled and available)
+        if record_prediction and self.learning_engine and LEARNING_AVAILABLE:
+            try:
+                current_gw = self.api.get_current_gameweek()
+                prediction_id = create_prediction_id(player_id, current_gw, 'points')
+                factors = extract_prediction_factors(player, avg_difficulty)
+                confidence = self.learning_engine.get_prediction_confidence(player_id, 'points')
+                
+                prediction_record = PredictionRecord(
+                    prediction_id=prediction_id,
+                    player_id=player_id,
+                    gameweek=current_gw,
+                    prediction_type='points',
+                    predicted_value=predicted_points,
+                    confidence=confidence,
+                    factors_used=factors
+                )
+                
+                self.learning_engine.record_prediction(prediction_record)
+            except Exception as e:
+                logger.warning(f"Could not record prediction: {e}")
+        
+        return predicted_points
+    
+    def _analyze_transfer_fixtures(self, player_out_id: int, player_in_id: int, 
+                                 player_out_name: str, player_in_name: str) -> Dict:
+        """Comprehensive fixture analysis for transfer recommendations"""
+        
+        if self.players_df is None:
+            self.update_data()
+        
+        current_gw = self.api.get_current_gameweek()
+        
+        # Get player data
+        player_out = self.players_df[self.players_df['id'] == player_out_id].iloc[0]
+        player_in = self.players_df[self.players_df['id'] == player_in_id].iloc[0]
+        
+        # Get team fixture difficulties for next 7 gameweeks (immediate + 6 ahead)
+        team_difficulty = self.api.get_team_difficulty()
+        
+        player_out_team = player_out['team']
+        player_in_team = player_in['team']
+        
+        # Get difficulties
+        out_difficulties = team_difficulty.get(player_out_team, {}).get('difficulties', [3] * 7)[:7]
+        in_difficulties = team_difficulty.get(player_in_team, {}).get('difficulties', [3] * 7)[:7]
+        
+        # Ensure we have 7 weeks of data
+        while len(out_difficulties) < 7:
+            out_difficulties.append(3)
+        while len(in_difficulties) < 7:
+            in_difficulties.append(3)
+        
+        # Immediate fixture analysis (next gameweek)
+        immediate_out_diff = out_difficulties[0]
+        immediate_in_diff = in_difficulties[0]
+        immediate_advantage = immediate_out_diff - immediate_in_diff
+        
+        # Short-term analysis (next 3 gameweeks)
+        short_term_out = sum(out_difficulties[:3]) / 3
+        short_term_in = sum(in_difficulties[:3]) / 3
+        short_term_advantage = short_term_out - short_term_in
+        
+        # Medium-term analysis (next 6 gameweeks)
+        medium_term_out = sum(out_difficulties[1:7]) / 6  # Exclude immediate
+        medium_term_in = sum(in_difficulties[1:7]) / 6
+        medium_term_advantage = medium_term_out - medium_term_in
+        
+        # Overall advantage (weighted)
+        overall_advantage = (
+            immediate_advantage * 0.4 +  # 40% weight on immediate
+            short_term_advantage * 0.4 + # 40% weight on next 3 GWs
+            medium_term_advantage * 0.2  # 20% weight on GW 4-7
+        )
+        
+        # Base points prediction
+        points_out = self.predict_player_points(player_out_id, gameweeks=6, record_prediction=False)
+        points_in = self.predict_player_points(player_in_id, gameweeks=6, record_prediction=False)
+        points_potential = points_in - points_out
+        
+        # Fixture adjustment to points potential
+        fixture_multiplier = 1.0 + (overall_advantage * 0.15)  # Each difficulty point difference = 15% impact
+        adjusted_points_potential = points_potential * fixture_multiplier
+        
+        # Decision logic
+        should_recommend = True
+        warning_flags = []
+        
+        # Red flags that should prevent recommendation
+        if immediate_in_diff >= 4 and immediate_advantage <= -1:
+            should_recommend = False
+            warning_flags.append("Very difficult immediate fixture")
+        
+        if immediate_in_diff >= 4 and short_term_in >= 3.5:
+            should_recommend = False
+            warning_flags.append("Difficult run of fixtures ahead")
+        
+        if adjusted_points_potential <= 0.5:
+            should_recommend = False
+            warning_flags.append("Minimal point improvement expected")
+        
+        # Generate detailed reasoning
+        if should_recommend:
+            fixture_assessment = self._get_fixture_assessment(in_difficulties[:6])
+            timing_advice = self._get_timing_advice(immediate_advantage, short_term_advantage)
+            
+            detailed_reason = f"Upgrade: {player_in_name} has {fixture_assessment} ({timing_advice})"
+            
+            # Add specific fixture warnings if needed
+            if immediate_in_diff >= 4:
+                detailed_reason += f" ⚠️ Tough immediate fixture (difficulty {immediate_in_diff})"
+            elif immediate_in_diff <= 2:
+                detailed_reason += f" ✨ Great immediate fixture (difficulty {immediate_in_diff})"
+            
+        else:
+            detailed_reason = f"⚠️ AVOID: {player_in_name} - {', '.join(warning_flags)}"
+        
+        # Confidence calculation
+        confidence = min(abs(adjusted_points_potential) / 15.0, 1.0)
+        if immediate_in_diff >= 4:
+            confidence *= 0.7  # Reduce confidence for difficult immediate fixtures
+        
+        return {
+            'should_recommend': should_recommend,
+            'points_potential': max(adjusted_points_potential, 0) if should_recommend else 0,
+            'confidence': confidence,
+            'detailed_reason': detailed_reason,
+            'immediate_advantage': immediate_advantage,
+            'fixture_analysis': {
+                'immediate_difficulty': immediate_in_diff,
+                'short_term_avg': round(short_term_in, 1),
+                'medium_term_avg': round(medium_term_in, 1),
+                'overall_advantage': round(overall_advantage, 2)
+            }
+        }
+    
+    def _get_fixture_assessment(self, difficulties: List[int]) -> str:
+        """Get human-readable fixture assessment"""
+        avg_diff = sum(difficulties) / len(difficulties)
+        
+        if avg_diff <= 2.0:
+            return "excellent fixtures ahead"
+        elif avg_diff <= 2.5:
+            return "good fixture run"
+        elif avg_diff <= 3.0:
+            return "decent fixtures"
+        elif avg_diff <= 3.5:
+            return "mixed fixtures"
+        else:
+            return "challenging fixtures"
+    
+    def _get_timing_advice(self, immediate_adv: float, short_term_adv: float) -> str:
+        """Get timing advice for the transfer"""
+        if immediate_adv >= 1.0:
+            return "excellent timing"
+        elif immediate_adv >= 0.5:
+            return "good timing"
+        elif immediate_adv >= 0:
+            return "reasonable timing"
+        elif immediate_adv >= -0.5:
+            return "consider waiting"
+        else:
+            return "poor timing - wait if possible"
+    
+    def get_learning_insights(self) -> Dict:
+        """Get learning insights and system performance"""
+        if self.learning_engine:
+            return self.learning_engine.generate_learning_report()
+        else:
+            return {
+                'summary': {
+                    'total_predictions_made': 0,
+                    'completed_predictions': 0,
+                    'overall_accuracy': 0,
+                    'learning_confidence': 0
+                },
+                'top_insights': [],
+                'current_weights': {
+                    'form_weight': 0.30,
+                    'value_weight': 0.25,
+                    'minutes_weight': 0.20,
+                    'recent_weight': 0.15,
+                    'bonus_weight': 0.10
+                },
+                'recommendations': ["Learning system not available - using default weights"]
+            }
+    
+    def update_learning_weights(self):
+        """Manually trigger weight updates based on learning"""
+        if self.learning_engine:
+            self.learning_engine.update_factor_weights()
+            logger.info("Updated analysis weights based on learning insights")
+        else:
+            logger.warning("Learning engine not available - cannot update weights")
     
     def get_transfer_recommendations(self, user_strategy: UserStrategy, 
                                    current_team: List[int], 
@@ -157,19 +398,23 @@ class AnalysisEngine:
             for _, candidate in top_candidates.iterrows():
                 if candidate['total_score'] > worst_player['total_score']:
                     
-                    # Calculate points potential
-                    points_potential = self.predict_player_points(candidate['id']) - self.predict_player_points(worst_player['id'])
+                    # Enhanced fixture-aware scoring
+                    transfer_analysis = self._analyze_transfer_fixtures(
+                        worst_player['id'], candidate['id'], 
+                        worst_player['web_name'], candidate['web_name']
+                    )
                     
-                    if points_potential > 0:
+                    # Only recommend if transfer makes sense for both immediate and medium-term
+                    if transfer_analysis['should_recommend']:
                         recommendation = TransferRecommendation(
                             player_out_id=int(worst_player['id']),
                             player_in_id=int(candidate['id']),
                             player_out_name=worst_player['web_name'],
                             player_in_name=candidate['web_name'],
                             cost_change=candidate['value'] - worst_player['value'],
-                            points_potential=points_potential,
-                            confidence=min(points_potential / 10.0, 1.0),
-                            reason=f"Upgrade {position}: Better form ({candidate['form_float']:.1f} vs {worst_player['form_float']:.1f}) and fixtures",
+                            points_potential=transfer_analysis['points_potential'],
+                            confidence=transfer_analysis['confidence'],
+                            reason=transfer_analysis['detailed_reason'],
                             priority=len(recommendations) + 1
                         )
                         recommendations.append(recommendation)
