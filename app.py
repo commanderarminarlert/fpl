@@ -1057,11 +1057,9 @@ def load_fpl_data():
         optimizer = TransferOptimizer(api, analysis)
         planner = ChipPlanner(api, analysis)
         
-        # Force fresh data update - no cache
-        analysis.update_data()
-        
-        # Force refresh bootstrap data
+        # Force refresh bootstrap data FIRST, then analysis with force_refresh
         api.get_bootstrap_data(force_refresh=True)
+        analysis.update_data(force_refresh=True)
         
         return api, analysis, optimizer, planner
     except Exception as e:
@@ -1395,16 +1393,17 @@ def dashboard_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transf
                 delta="Available"
             )
         
-        # Current team
+        # Current team (LIVE, including pending transfers when applicable)
         try:
-            team_data = api.get_manager_team(manager_id, current_gw)
+            live_team_state = api.get_current_team_with_transfers(manager_id)
+            team_data = live_team_state.get('team_data')
             if team_data and 'picks' in team_data:
                 
-                st.subheader("Current Team")
+                st.subheader("Current Team (Live)")
                 
                 # Get player details - ensure data is loaded
                 if analysis.players_df is None:
-                    analysis.update_data()
+                    analysis.update_data(force_refresh=True)
                 players_df = analysis.players_df
                 team_picks = team_data['picks']
                 

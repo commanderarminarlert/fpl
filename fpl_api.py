@@ -52,15 +52,41 @@ class FPLApiClient:
         self._last_fetch = None
         
     def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
-        """Make a request to the FPL API with error handling"""
-        try:
-            url = f"{self.BASE_URL}/{endpoint}"
-            response = self.session.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed for {endpoint}: {e}")
-            raise
+        """Make a request to the FPL API with retries and backoff for robustness"""
+        url = f"{self.BASE_URL}/{endpoint}"
+        max_attempts = 4
+        backoff_seconds = 0.5
+        last_exception = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = self.session.get(url, params=params, timeout=30)
+                # Retry on 5xx and 429 statuses
+                if response.status_code in (500, 502, 503, 504, 429):
+                    raise requests.exceptions.HTTPError(
+                        f"{response.status_code} {response.reason}", response=response
+                    )
+                response.raise_for_status()
+                return response.json()
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                logger.warning(
+                    f"Request to {endpoint} failed on attempt {attempt}/{max_attempts}: {e}"
+                )
+                if attempt < max_attempts:
+                    # Respect Retry-After if present
+                    retry_after = 0
+                    if hasattr(e, 'response') and e.response is not None:
+                        ra = e.response.headers.get('Retry-After')
+                        if ra:
+                            try:
+                                retry_after = float(ra)
+                            except Exception:
+                                retry_after = 0
+                    sleep_time = max(backoff_seconds * (2 ** (attempt - 1)), retry_after)
+                    time.sleep(sleep_time)
+                else:
+                    logger.error(f"API request failed for {endpoint} after {max_attempts} attempts: {e}")
+                    raise
     
     def get_bootstrap_data(self, force_refresh: bool = False) -> Dict:
         """Get bootstrap data (general game info, players, teams, etc.)"""
