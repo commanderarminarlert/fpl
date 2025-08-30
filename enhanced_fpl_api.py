@@ -48,10 +48,10 @@ class EnhancedFPLApiClient:
             'User-Agent': 'FPL-Assistant-Pro/1.0'
         })
         
-        # Data caching
+        # Data caching - AGGRESSIVE REAL-TIME MODE
         self._cache = {}
         self._cache_timestamps = {}
-        self._cache_duration = 300  # 5 minutes default
+        self._cache_duration = 60  # 1 minute default for maximum accuracy
         
         # Quality tracking
         self.quality_metrics = []

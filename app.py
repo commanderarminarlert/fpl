@@ -1046,17 +1046,22 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=600)  # Cache for 10 minutes
 def load_fpl_data():
-    """Load and cache FPL data"""
+    """Load REAL-TIME FPL data - NO CACHING for maximum accuracy"""
     try:
+        # Clear all Streamlit caches to ensure fresh data
+        st.cache_data.clear()
+        
         api = FPLApiClient()
         analysis = AnalysisEngine(api)
         optimizer = TransferOptimizer(api, analysis)
         planner = ChipPlanner(api, analysis)
         
-        # Update data
+        # Force fresh data update - no cache
         analysis.update_data()
+        
+        # Force refresh bootstrap data
+        api.get_bootstrap_data(force_refresh=True)
         
         return api, analysis, optimizer, planner
     except Exception as e:
@@ -1529,13 +1534,30 @@ def dashboard_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transf
 
 def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: TransferOptimizer, manager_id: int, max_transfers: int):
     """Transfer Analysis & Recommendations"""
-    st.header("🔄 Transfer Analysis")
-    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.header("🔄 Transfer Analysis")
+    with col2:
+        if st.button("🔄 Refresh Data", help="Force refresh all data from FPL API"):
+            st.cache_data.clear()
+            st.rerun()
+
     if not manager_id:
         st.warning("Please enter your Manager ID to get transfer recommendations.")
         return
-    
+
     try:
+        # FORCE REAL-TIME DATA REFRESH
+        with st.spinner("🔄 Fetching latest data from FPL..."):
+            # Clear all caches and force fresh data
+            api.get_bootstrap_data(force_refresh=True)
+            analysis.update_data()
+            
+            # Force fresh enhanced API data if available
+            if hasattr(api, 'enhanced_api') and api.enhanced_api:
+                api.enhanced_api._cache.clear()
+                api.enhanced_api._cache_timestamps.clear()
+        
         # Get current gameweek and team data
         current_gw = api.get_current_gameweek()
         team_data = api.get_manager_team(manager_id, current_gw)

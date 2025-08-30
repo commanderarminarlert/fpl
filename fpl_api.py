@@ -64,13 +64,16 @@ class FPLApiClient:
     
     def get_bootstrap_data(self, force_refresh: bool = False) -> Dict:
         """Get bootstrap data (general game info, players, teams, etc.)"""
-        # Cache bootstrap data for 10 minutes to avoid excessive API calls
-        if (self._bootstrap_data is None or force_refresh or 
-            (self._last_fetch and datetime.now() - self._last_fetch > timedelta(minutes=10))):
-            
-            logger.info("Fetching bootstrap data...")
+        # REAL-TIME MODE: Always fetch fresh data when force_refresh=True
+        # Otherwise cache for only 2 minutes for maximum accuracy
+        cache_expired = (self._last_fetch and 
+                        datetime.now() - self._last_fetch > timedelta(minutes=2))
+        
+        if (self._bootstrap_data is None or force_refresh or cache_expired):
+            logger.info("🔄 Fetching REAL-TIME bootstrap data...")
             self._bootstrap_data = self._make_request("bootstrap-static/")
             self._last_fetch = datetime.now()
+            logger.info("✅ Fresh data loaded from FPL API")
             
         return self._bootstrap_data
     
