@@ -52,15 +52,26 @@ class FPLApiClient:
         self._last_fetch = None
         
     def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
-        """Make a request to the FPL API with error handling"""
-        try:
-            url = f"{self.BASE_URL}/{endpoint}"
-            response = self.session.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed for {endpoint}: {e}")
-            raise
+        """Make a request to the FPL API with error handling and basic retries"""
+        url = f"{self.BASE_URL}/{endpoint}"
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = self.session.get(url, params=params, timeout=30)
+                # Handle transient errors with retry logic
+                if response.status_code in (429,) or 500 <= response.status_code < 600:
+                    raise requests.exceptions.HTTPError(
+                        f"{response.status_code} Server Error", response=response
+                    )
+                response.raise_for_status()
+                return response.json()
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                wait_seconds = 0.5 * (2 ** attempt)
+                logger.warning(f"API request error for {endpoint} (attempt {attempt+1}/3): {e}. Retrying in {wait_seconds:.1f}s...")
+                time.sleep(wait_seconds)
+        logger.error(f"API request failed for {endpoint} after retries: {last_error}")
+        raise last_error
     
     def get_bootstrap_data(self, force_refresh: bool = False) -> Dict:
         """Get bootstrap data (general game info, players, teams, etc.)"""

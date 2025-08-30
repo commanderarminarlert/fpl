@@ -1057,11 +1057,19 @@ def load_fpl_data():
         optimizer = TransferOptimizer(api, analysis)
         planner = ChipPlanner(api, analysis)
         
-        # Force fresh data update - no cache
-        analysis.update_data()
-        
-        # Force refresh bootstrap data
+        # Force refresh bootstrap data BEFORE analysis so downstream uses freshest data
         api.get_bootstrap_data(force_refresh=True)
+        
+        # Clear enhanced API caches if available
+        if hasattr(api, 'enhanced_api') and api.enhanced_api:
+            try:
+                api.enhanced_api._cache.clear()
+                api.enhanced_api._cache_timestamps.clear()
+            except Exception:
+                pass
+        
+        # Force fresh data update - ensure players/fixtures/teams are rebuilt from live bootstrap
+        analysis.update_data(force_refresh=True)
         
         return api, analysis, optimizer, planner
     except Exception as e:
@@ -1313,8 +1321,18 @@ def dashboard_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transf
         st.header("📊 Team Dashboard")
     
     with col2:
-        # Dashboard header only
-        pass
+        if st.button("🔄 Refresh Live Data", help="Clear cache and pull latest from fantasy.premierleague.com"):
+            st.cache_data.clear()
+            # Reset API caches
+            try:
+                api._bootstrap_data = None
+                api._last_fetch = None
+                if hasattr(api, 'enhanced_api') and api.enhanced_api:
+                    api.enhanced_api._cache.clear()
+                    api.enhanced_api._cache_timestamps.clear()
+            except Exception:
+                pass
+            st.rerun()
     
     if not manager_id:
         st.warning("Please enter your team URL or Manager ID in the sidebar to see your dashboard.")
@@ -1325,8 +1343,9 @@ def dashboard_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transf
         current_gw = api.get_current_gameweek()
         gw_info = api.get_gameweek_info(current_gw)
         
-        # Get manager data
-        manager_data = api.get_manager_data(manager_id)
+        # Get LIVE manager/team state (includes pending transfers)
+        live_team_state = api.get_current_team_with_transfers(manager_id)
+        manager_data = live_team_state.get('manager_data', api.get_manager_data(manager_id))
         
         # Key metrics
         col1, col2, col3, col4 = st.columns(4)
@@ -1346,40 +1365,9 @@ def dashboard_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transf
             )
         
         with col3:
-            # Calculate real-time team value from actual picks
-            team_data_for_value = api.get_manager_team(manager_id, current_gw)
-            current_team_value = 100.0  # Default fallback
-            # Use enhanced API for accurate bank balance if available
-            if hasattr(api, 'enhanced_api') and api.enhanced_api:
-                try:
-                    bank_result = api.enhanced_api.calculate_accurate_bank_balance(manager_id)
-                    bank_balance = bank_result[0]
-                except:
-                    bank_balance = manager_data.get('last_deadline_bank', 0) / 10
-            else:
-                bank_balance = manager_data.get('last_deadline_bank', 0) / 10
-            
-            if team_data_for_value and 'picks' in team_data_for_value:
-                try:
-                    players_df_for_value = api.get_players_data()
-                    total_value = 0
-                    
-                    for pick in team_data_for_value['picks']:
-                        player_data = players_df_for_value[players_df_for_value['id'] == pick['element']]
-                        if not player_data.empty:
-                            total_value += player_data.iloc[0]['value']
-                    
-                    current_team_value = total_value
-                    
-                    # Also get actual bank from current gameweek data if available (fallback)
-                    if 'entry_history' in team_data_for_value and not (hasattr(api, 'enhanced_api') and api.enhanced_api):
-                        bank_balance = team_data_for_value['entry_history'].get('bank', 0) / 10
-                        
-                except Exception as e:
-                    logger.warning(f"Error calculating team value: {e}")
-                    # Fallback to manager data value
-                    current_team_value = manager_data.get('last_deadline_value', 1000) / 10
-            
+            # Use LIVE values from current team state when available
+            bank_balance = live_team_state.get('bank_balance', manager_data.get('last_deadline_bank', 0) / 10)
+            current_team_value = live_team_state.get('team_value', manager_data.get('last_deadline_value', 1000) / 10)
             st.metric(
                 "Team Value",
                 f"£{current_team_value:.1f}m",
@@ -1397,7 +1385,7 @@ def dashboard_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transf
         
         # Current team
         try:
-            team_data = api.get_manager_team(manager_id, current_gw)
+            team_data = live_team_state.get('team_data')
             if team_data and 'picks' in team_data:
                 
                 st.subheader("Current Team")
