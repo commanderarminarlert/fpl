@@ -1707,26 +1707,29 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
         
         # 4. Hidden Gem Transfers
         st.subheader("💎 **Hidden Gem Transfers**")
-        st.caption("Good potential but slightly risky")
+        st.caption("Undervalued players with explosive potential")
         
         try:
-            # Find hidden gems - players with good stats but low ownership
+            # Find hidden gems - players with explosive potential but low ownership
             hidden_gems = available_players[
-                (available_players['selected_by_percent'] < 10.0) &  # Low ownership
-                (available_players['total_score'] > 60) &  # Good score
-                (available_players['value'] < 8.0)  # Affordable
-            ].nlargest(8, 'total_score')
+                (available_players['selected_by_percent'] < 15.0) &  # Low ownership (not well known)
+                (available_players['form_float'] > 3.0) &  # Good recent form
+                (available_players['total_points'] > 15) &  # Some proven performance
+                (available_players['minutes'] > 200) &  # Regular playing time
+                (available_players['value'] < 9.0)  # Still affordable
+            ].nlargest(10, 'total_score')
             
             if not hidden_gems.empty:
                 gems_df = hidden_gems[[
                     'web_name', 'team_name', 'value', 'total_points', 
-                    'form_float', 'selected_by_percent', 'total_score'
+                    'form_float', 'selected_by_percent', 'minutes', 'total_score'
                 ]].copy()
                 
                 gems_df['total_score'] = gems_df['total_score'].round(1)
+                gems_df['minutes'] = (gems_df['minutes'] / 90).round(1)  # Convert to games played
                 gems_df.columns = [
                     'Player', 'Team', 'Price (£m)', 'Points', 
-                    'Form', 'Ownership (%)', 'Score'
+                    'Form', 'Ownership (%)', 'Games', 'Score'
                 ]
                 
                 # Use the same styled table function
@@ -1752,10 +1755,10 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
                 
                 st.markdown(create_styled_table_gems(gems_df), unsafe_allow_html=True)
             else:
-                st.info("No hidden gems found at this time.")
+                st.info("No explosive potential players found with current criteria. Try adjusting your search!")
         except Exception as e:
-            st.error(f"Error finding hidden gems: {e}")
-            st.info("Unable to load hidden gems at this time.")
+            st.error(f"Error finding explosive players: {e}")
+            st.info("Unable to load potential breakout players at this time.")
         
     except Exception as e:
         st.error(f"Error in transfer analysis: {e}")
