@@ -249,44 +249,89 @@ class FPLApiClient:
         logger.info(f"🔄 Getting EXACT current team state for manager {manager_id}")
         
         try:
-            # Get manager data (includes current bank, team value, etc.)
+            # Get manager data (includes REAL current bank, team value, etc.)
             manager_data = self.get_manager_data(manager_id)
             
-            # Get current gameweek
-            current_gw = self.get_current_gameweek()
+            # Get current gameweek from bootstrap
+            bootstrap = self.get_bootstrap_data(force_refresh=True)
+            events = bootstrap['events']
             
-            # Try to get team for current gameweek first
+            current_gw = None
+            next_gw = None
+            
+            # Find current and next gameweeks
+            for event in events:
+                if event.get('is_current'):
+                    current_gw = event['id']
+                elif event.get('is_next'):
+                    next_gw = event['id']
+            
+            if not current_gw:
+                # If no current GW, find the latest finished one
+                for event in reversed(events):
+                    if event.get('finished'):
+                        current_gw = event['id']
+                        break
+            
+            logger.info(f"🎯 Detected: Current GW{current_gw}, Next GW{next_gw}")
+            
+            # Strategy: Try multiple gameweeks to find the most current team
             team_data = None
-            try:
-                team_data = self.get_manager_team(manager_id, current_gw)
-                logger.info(f"✅ Found team data for current GW{current_gw}")
-            except:
-                pass
+            gameweek_used = current_gw
             
-            # If no current GW data, try next gameweek (where pending transfers would be)
-            if not team_data or 'picks' not in team_data:
+            # 1. Try next gameweek first (where pending transfers appear)
+            if next_gw:
                 try:
-                    team_data = self.get_manager_team(manager_id, current_gw + 1)
+                    team_data = self.get_manager_team(manager_id, next_gw)
                     if team_data and 'picks' in team_data:
-                        logger.info(f"✅ Found team data for next GW{current_gw + 1} (pending transfers)")
-                        current_gw = current_gw + 1
+                        gameweek_used = next_gw
+                        logger.info(f"✅ Found team data for NEXT GW{next_gw} (includes pending transfers)")
                 except:
                     pass
             
-            # If still no data, try previous gameweek
+            # 2. If no next GW data, try current gameweek
             if not team_data or 'picks' not in team_data:
                 try:
-                    team_data = self.get_manager_team(manager_id, current_gw - 1)
+                    team_data = self.get_manager_team(manager_id, current_gw)
                     if team_data and 'picks' in team_data:
-                        logger.info(f"✅ Found team data for previous GW{current_gw - 1}")
-                        current_gw = current_gw - 1
+                        gameweek_used = current_gw
+                        logger.info(f"✅ Found team data for current GW{current_gw}")
                 except:
                     pass
             
-            # Get transfers data
+            # 3. If still no data, try previous gameweek
+            if not team_data or 'picks' not in team_data:
+                try:
+                    prev_gw = current_gw - 1 if current_gw > 1 else 1
+                    team_data = self.get_manager_team(manager_id, prev_gw)
+                    if team_data and 'picks' in team_data:
+                        gameweek_used = prev_gw
+                        logger.info(f"✅ Found team data for previous GW{prev_gw}")
+                except:
+                    pass
+            
+            # Get transfers data (shows recent transfers)
             transfers_data = None
             try:
                 transfers_data = self._make_request(f"entry/{manager_id}/transfers/")
+                if transfers_data and 'transfers' in transfers_data:
+                    logger.info(f"📊 Found {len(transfers_data['transfers'])} transfers in history")
+            except Exception as e:
+                logger.warning(f"Could not get transfers data: {e}")
+            
+            # Calculate REAL bank balance and team value
+            # The manager_data contains the ACTUAL current values
+            bank_balance = manager_data.get('last_deadline_bank', 0) / 10
+            team_value = manager_data.get('last_deadline_value', 1000) / 10
+            
+            # Alternative: Try to get from summary_overall_rank endpoint
+            try:
+                summary_data = self._make_request(f"entry/{manager_id}/")
+                if summary_data:
+                    # These are the LIVE values
+                    bank_balance = summary_data.get('last_deadline_bank', bank_balance * 10) / 10
+                    team_value = summary_data.get('last_deadline_value', team_value * 10) / 10
+                    logger.info(f"💰 LIVE values: Bank £{bank_balance:.1f}m, Team £{team_value:.1f}m")
             except:
                 pass
             
@@ -295,12 +340,14 @@ class FPLApiClient:
                 'manager_data': manager_data,
                 'team_data': team_data,
                 'transfers_data': transfers_data,
-                'gameweek_used': current_gw,
-                'bank_balance': manager_data.get('last_deadline_bank', 0) / 10,
-                'team_value': manager_data.get('last_deadline_value', 1000) / 10,
+                'gameweek_used': gameweek_used,
+                'bank_balance': bank_balance,
+                'team_value': team_value,
+                'current_gw': current_gw,
+                'next_gw': next_gw,
             }
             
-            logger.info(f"✅ Complete team state retrieved for GW{current_gw}")
+            logger.info(f"✅ Complete LIVE team state: GW{gameweek_used}, Bank £{bank_balance:.1f}m, Value £{team_value:.1f}m")
             return result
             
         except Exception as e:

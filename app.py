@@ -1569,54 +1569,60 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
             
             st.success("✅ Live data synced from fantasy.premierleague.com")
         
-        # 🚨 NEW: Get LIVE team data (equivalent to /my-team page)
-        st.write("**🔄 Fetching LIVE team data from fantasy.premierleague.com/my-team...**")
+        # 🚨 Get LIVE team data (tries next GW first for pending transfers)
+        st.write("**🔄 Fetching LIVE team data (checking for pending transfers)...**")
         
         if manual_gw:
             # Manual override - use specific gameweek
-            detected_gw = api.get_current_gameweek()
             current_gw = manual_gw
-            st.info(f"🎯 Using Manual Override: GW{current_gw} (detected: GW{detected_gw})")
-            
             team_data = api.get_manager_team(manager_id, current_gw)
             manager_data = api.get_manager_data(manager_id)
+            
+            st.info(f"🎯 Manual Override: Using GW{current_gw}")
             
             if not team_data or 'picks' not in team_data:
                 st.error(f"❌ No team data found for GW{current_gw}")
                 return
                 
+            # Use basic bank/value calculation for manual override
+            bank_balance = manager_data.get('last_deadline_bank', 0) / 10
+            current_team_value = manager_data.get('last_deadline_value', 1000) / 10
+                
         else:
-            # Use new live team method
+            # Use new SMART live team method
             try:
                 live_team_state = api.get_current_team_with_transfers(manager_id)
                 
                 team_data = live_team_state['team_data']
                 manager_data = live_team_state['manager_data']
                 current_gw = live_team_state['gameweek_used']
+                bank_balance = live_team_state['bank_balance']
+                current_team_value = live_team_state['team_value']
                 
-                st.success(f"✅ LIVE team data loaded from GW{current_gw}")
+                # Show what we found
+                if live_team_state['next_gw'] and current_gw == live_team_state['next_gw']:
+                    st.success(f"✅ Found your PENDING TRANSFERS for GW{current_gw}!")
+                elif current_gw == live_team_state['current_gw']:
+                    st.success(f"✅ Using current GW{current_gw} team")
+                else:
+                    st.warning(f"⚠️ Using GW{current_gw} team (most recent available)")
                 
                 # Show transfers if any
                 if live_team_state.get('transfers_data') and live_team_state['transfers_data'].get('transfers'):
                     transfers = live_team_state['transfers_data']['transfers']
-                    if transfers:
-                        st.info(f"🔄 Found {len(transfers)} recent transfers")
+                    recent_transfers = [t for t in transfers if t.get('event', 0) >= current_gw - 1]
+                    if recent_transfers:
+                        st.info(f"🔄 Found {len(recent_transfers)} recent transfers")
                 
             except Exception as e:
                 st.error(f"❌ Failed to get live team data: {e}")
-                st.info("Falling back to gameweek-based method...")
-                
-                # Fallback to old method
-                detected_gw = api.get_current_gameweek()
-                current_gw = detected_gw
-                team_data = api.get_manager_team(manager_id, current_gw)
-                manager_data = api.get_manager_data(manager_id)
+                return
         
         # DEBUG: Show gameweek status
-        bootstrap = api.get_bootstrap_data(force_refresh=True)
-        events = bootstrap['events']
-        
         with st.expander("🔍 Debug: Gameweek Status"):
+            bootstrap = api.get_bootstrap_data(force_refresh=True)
+            events = bootstrap['events']
+            
             for event in events[:5]:  # Show first 5 gameweeks
                 status = []
                 if event.get('is_current'): status.append("CURRENT")
@@ -1630,32 +1636,12 @@ def transfer_tab(api: FPLApiClient, analysis: AnalysisEngine, optimizer: Transfe
             st.error(f"❌ Could not load any team data for manager {manager_id}")
             return
         
-        # Debug information
-        st.info(f"📊 Using GW{current_gw} team data: {len(team_data.get('picks', []))} players")
+        # Show what we're using
+        st.info(f"📊 Using GW{current_gw} team: {len(team_data.get('picks', []))} players")
+        st.success(f"💰 Bank: £{bank_balance:.1f}m | Team Value: £{current_team_value:.1f}m")
         
-        # Calculate real-time metrics from LIVE data
-        if 'live_team_state' in locals() and live_team_state:
-            # Use live team state data (most accurate)
-            bank_balance = live_team_state['bank_balance']
-            current_team_value = live_team_state['team_value']
-            free_transfers = api.calculate_available_transfers(manager_id)
-            
-            st.success(f"💰 LIVE Bank Balance: £{bank_balance:.1f}m")
-            st.success(f"📊 LIVE Team Value: £{current_team_value:.1f}m")
-            
-        elif hasattr(api, 'enhanced_api') and api.enhanced_api:
-            try:
-                bank_balance = api.enhanced_api.calculate_accurate_bank_balance(manager_id)[0]
-                current_team_value = api.enhanced_api.calculate_accurate_team_value(manager_id)[0]
-                free_transfers = api.enhanced_api.calculate_accurate_free_transfers(manager_id)[0]
-            except:
-                bank_balance = manager_data.get('last_deadline_bank', 0) / 10
-                current_team_value = manager_data.get('last_deadline_value', 1000) / 10
-                free_transfers = api.calculate_available_transfers(manager_id)
-        else:
-            bank_balance = manager_data.get('last_deadline_bank', 0) / 10
-            current_team_value = manager_data.get('last_deadline_value', 1000) / 10
-            free_transfers = api.calculate_available_transfers(manager_id)
+        # Calculate free transfers (bank balance and team value already calculated above)
+        free_transfers = api.calculate_available_transfers(manager_id)
         
         # 1. Team Status
         col1, col2, col3 = st.columns(3)
